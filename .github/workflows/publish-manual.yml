@@ -1,0 +1,74 @@
+name: Manual Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.1.1)'
+        required: true
+      target:
+        description: 'Publish target: test or pypi'
+        required: true
+        default: 'test'
+
+jobs:
+  prepare_tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Bump version and push tag
+        run: |
+          ver="${{ github.event.inputs.version }}"
+          echo "Updating version to $ver"
+          sed -i -E "s/^version\s*=\s*\".*\"/version = \"$ver\"/" pyproject.toml
+          sed -i -E "s/^__version__\s*=\s*\".*\"/__version__ = \"$ver\"/" aicv/__init__.py
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add pyproject.toml aicv/__init__.py
+          git commit -m "chore(release): v$ver" || echo "No changes to commit"
+          git tag "v$ver" -m "aicv-python v$ver" || echo "Tag exists"
+          git push origin HEAD
+          git push origin "v$ver" || echo "Tag already pushed"
+
+  publish:
+    needs: prepare_tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check package
+        run: twine check dist/*
+
+      - name: Publish to TestPyPI
+        if: ${{ github.event.inputs.target == 'test' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          user: __token__
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+      - name: Publish to PyPI
+        if: ${{ github.event.inputs.target == 'pypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+

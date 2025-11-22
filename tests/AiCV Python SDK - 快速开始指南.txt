@@ -1,0 +1,332 @@
+# AiCV Python SDK - 快速开始指南
+
+## 简介
+
+AiCV Python SDK 是一个基于AI的简历分析和优化工具包，帮助开发者快速集成智能简历分析功能。
+
+## 安装
+
+```bash
+pip install aicv-python
+```
+
+## 快速开始
+
+### 1. 基本使用
+
+```python
+from aicv import AiCVClient
+
+# 初始化客户端
+client = AiCVClient(api_key="your-api-key")
+
+# 获取简历建议
+result = client.get_resume_suggestions(
+    resume_text="你的简历内容...",
+    job_title="目标职位",
+    job_description="职位描述..."
+)
+
+print(result)
+```
+
+### 2. 使用上下文管理器（推荐）
+
+```python
+from aicv import AiCVClient
+
+# 自动管理连接生命周期
+with AiCVClient(api_key="your-api-key") as client:
+    result = client.get_resume_suggestions(
+        resume_text="你的简历内容...",
+        job_title="Python开发工程师",
+        job_description="负责后端开发，要求熟悉Python、FastAPI等..."
+    )
+    print(result)
+```
+
+### 3. 错误处理
+
+```python
+from aicv import AiCVClient, AuthenticationError, APIError, ValidationError
+
+try:
+    with AiCVClient(api_key="your-api-key") as client:
+        result = client.get_resume_suggestions(
+            resume_text="简历内容",
+            job_title="职位",
+            job_description="描述"
+        )
+except AuthenticationError:
+    print("API密钥无效")
+except ValidationError as e:
+    print(f"参数验证错误: {e}")
+except APIError as e:
+    print(f"API错误: {e}")
+```
+
+### 4. 云端部署与异步回调
+
+对于云端部署场景，可以使用异步回调机制来处理长时间运行的分析任务：
+
+```python
+from aicv import AiCVClient
+
+# 云端部署配置
+client = AiCVClient(
+    api_key="your-api-key",
+    base_url="https://api.aicv.chat",
+    timeout=600.0
+)
+
+# 使用异步回调
+result = client.get_resume_suggestions(
+    resume_text="简历内容...",
+    job_title="目标职位",
+    job_description="职位描述...",
+    callback_url="https://your-domain.com/webhook/aicv-callback"  # 回调地址
+)
+
+print("任务已提交，结果将通过回调地址返回")
+```
+
+### 5. 开发环境配置
+
+在开发环境中，建议禁用SSL验证以避免证书问题：
+
+```python
+from aicv import AiCVClient
+
+# 开发环境配置
+client = AiCVClient(
+    api_key="your-api-key",
+    verify=False,  # 开发环境禁用SSL验证
+    timeout=30.0   # 开发环境使用较短超时时间
+)
+
+# 或者使用上下文管理器
+with AiCVClient(api_key="your-api-key", verify=False) as client:
+    result = client.get_resume_suggestions(
+        resume_text="简历内容",
+        job_title="职位",
+        job_description="描述"
+    )
+```
+
+**注意：** 生产环境中请务必设置 `verify=True`（默认值）以确保安全性。
+
+## 命令行工具
+
+```bash
+# 分析简历
+aicv analyze --api-key YOUR_KEY --cv-text "简历内容"
+
+# 生成简历内容
+aicv generate --api-key YOUR_KEY --section-type summary --context "高级Python开发工程师"
+
+# 优化简历
+aicv optimize --api-key YOUR_KEY --cv-text "简历内容" --target-job "目标职位"
+
+# 检查账户信息
+aicv account --api-key YOUR_KEY
+
+# 健康检查
+aicv health --api-key YOUR_KEY
+```
+
+## API 参考
+
+### AiCVClient
+
+主要的客户端类，用于与AiCV API交互。
+
+#### 构造函数
+
+```python
+AiCVClient(
+    api_key: str,
+    base_url: str = "https://api.aicv.chat",
+    timeout: float = 600.0,
+    verify: bool = True,
+    **kwargs
+)
+```
+
+**参数:**
+- `api_key` (str): 你的AiCV API密钥
+- `base_url` (str): API基础URL (默认: https://api.aicv.chat)
+- `timeout` (float): 请求超时时间，秒 (默认: 600.0)
+- `verify` (bool): SSL证书验证 (默认: True，开发环境可设为False)
+- `**kwargs`: 传递给httpx.Client的额外参数
+
+#### 方法
+
+##### get_resume_suggestions(resume_text, job_title, job_description, callback_url=None)
+
+基于职位要求获取简历建议。
+
+**参数:**
+- `resume_text` (str): 要分析的简历文本
+- `job_title` (str): 目标职位
+- `job_description` (str): 职位描述
+- `callback_url` (str, 可选): 异步回调地址，用于云端部署场景
+
+**返回:** 简历建议字典
+
+**使用场景:**
+- **同步模式**: 不提供callback_url，直接返回分析结果
+- **异步模式**: 提供callback_url，任务提交后通过回调地址返回结果
+
+## 完整示例
+
+### 基础使用示例
+
+```python
+from aicv import AiCVClient, AuthenticationError, APIError, ValidationError
+
+def analyze_resume():
+    """完整的简历分析工作流"""
+    
+    # 简历内容
+    resume_text = """
+    张三
+    高级Python开发工程师
+    
+    工作经验:
+    - 5年Python开发经验
+    - 3年机器学习项目经验
+    - 带领过8人开发团队
+    
+    技能:
+    - Python, JavaScript, React
+    - 机器学习, 深度学习
+    - AWS, Docker, Kubernetes
+    """
+    
+    # 目标职位信息
+    job_title = "高级Python开发工程师"
+    job_description = """
+    负责后端服务开发，要求：
+    - 5年以上Python开发经验
+    - 熟悉FastAPI、Django框架
+    - 有机器学习项目经验
+    - 具备团队管理能力
+    """
+    
+    try:
+        with AiCVClient(api_key="your-api-key") as client:
+            # 获取简历建议
+            suggestions = client.get_resume_suggestions(
+                resume_text=resume_text,
+                job_title=job_title,
+                job_description=job_description
+            )
+            
+            print("简历分析结果:")
+            print(suggestions)
+            
+            return suggestions
+            
+    except AuthenticationError:
+        print("错误: API密钥无效，请检查你的API密钥")
+    except ValidationError as e:
+        print(f"错误: 参数验证失败 - {e}")
+    except APIError as e:
+        print(f"错误: API调用失败 - {e}")
+    except Exception as e:
+        print(f"错误: 未知错误 - {e}")
+
+if __name__ == "__main__":
+    analyze_resume()
+```
+
+### 云端部署异步回调示例
+
+```python
+from aicv import AiCVClient
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+def submit_async_analysis():
+    """提交异步分析任务"""
+    client = AiCVClient(
+        api_key="your-api-key",
+        base_url="https://api.aicv.chat",
+        timeout=600.0
+    )
+    
+    # 使用异步回调
+    result = client.get_resume_suggestions(
+        resume_text="简历内容...",
+        job_title="目标职位",
+        job_description="职位描述...",
+        callback_url="https://your-domain.com/webhook/aicv-callback"
+    )
+    
+    return {"status": "submitted", "task_id": result.get("task_id")}
+
+@app.route('/webhook/aicv-callback', methods=['POST'])
+def handle_callback():
+    """处理AiCV回调结果"""
+    data = request.get_json()
+    
+    if data.get('status') == 'completed':
+        suggestions = data.get('suggestions')
+        # 处理分析结果
+        print("收到分析结果:", suggestions)
+        return jsonify({"status": "received"})
+    
+    return jsonify({"status": "error"})
+
+if __name__ == "__main__":
+    app.run(debug=True)
+```
+
+### 开发环境配置示例
+
+```python
+import os
+from aicv import AiCVClient
+
+def development_setup():
+    """开发环境配置示例"""
+    
+    # 开发环境配置
+    client = AiCVClient(
+        api_key=os.getenv('AICV_API_KEY', 'your-dev-key'),
+        verify=False,  # 开发环境禁用SSL验证
+        timeout=30.0,  # 开发环境使用较短超时时间
+        base_url="https://api.aicv.chat"
+    )
+    
+    try:
+        with client as c:
+            result = c.get_resume_suggestions(
+                resume_text="测试简历内容",
+                job_title="测试职位",
+                job_description="测试描述"
+            )
+            print("开发环境测试成功:", result)
+    except Exception as e:
+        print(f"开发环境测试失败: {e}")
+
+if __name__ == "__main__":
+    development_setup()
+```
+
+## 获取API密钥
+
+1. 访问 [AiCV官网](https://aicv.chat)
+2. 注册账户
+3. 在控制台获取API密钥
+
+## 支持与帮助
+
+-  邮箱: contact@aigility.cn
+-  文档: [https://aicv-python.readthedocs.io](https://aicv-python.readthedocs.io)
+-  问题反馈: [GitHub Issues](https://github.com/AIGility-Cloud-Innovation/aicv-python/issues)
+
+## 许可证
+
+本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
