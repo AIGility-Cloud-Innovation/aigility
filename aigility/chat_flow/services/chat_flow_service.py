@@ -6,16 +6,12 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.pydantic_v1 import BaseModel, Field
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
-from aigility.chat_flow.schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, get_tool_names, get_tool_schema_map
+from aigility.chat_flow.schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, get_tool_names, get_tool_schema_map, LLMConfig
 
-# 假设 OpenAI API Key 已经配置在环境变量中
-# LLM = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-# 考虑到沙箱环境，使用预配置的 LLM
-LLM = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
+# --- 1. 辅助函数：加载配置 ---
 
 # --- 1. 辅助函数：加载配置 ---
 def load_config() -> Dict[str, Any]:
@@ -33,9 +29,10 @@ class ChatFlowService:
     一个即插即用的 LangGraph ChatFlow 服务。
     实现了 CoT、RAG 和 Web Search 的交互逻辑。
     """
-    def __init__(self, checkpoint: Optional[BaseCheckpointSaver] = None):
+    def __init__(self, llm_config: LLMConfig = LLMConfig(), checkpoint: Optional[BaseCheckpointSaver] = None):
         self.config = CONFIG
-        self.llm = LLM
+        self.llm_config = llm_config
+        self.llm = self.llm_config.get_client()
         self.tools = get_tool_schema_map()
         self.graph = self._build_graph(checkpoint)
 
@@ -187,8 +184,6 @@ class ChatFlowService:
         # 2. 绑定结构化输出
         class FinalOutput(BaseModel):
             final_response: str = Field(description="The final, comprehensive, and professional response to the user.")
-            session_title_suggestion: str = Field(description="A concise session title (max 15 characters).")
-            reply_suggestion: str = Field(description="3 suggested follow-up questions or actions, separated by commas.")
 
         prompt = ChatPromptTemplate.from_messages([
             ("system", response_prompt.format(
@@ -208,16 +203,12 @@ class ChatFlowService:
             print(f"Final Response Generation failed: {e}")
             # 失败时，返回一个简单的错误信息
             final_response = f"抱歉，生成最终回复时发生错误: {e}"
-            session_title_suggestion = "对话错误"
-            reply_suggestion = "请重试, 报告错误"
             
             # 更新消息历史
             state["messages"].append(AIMessage(content=final_response))
             
             return {
                 "messages": state["messages"],
-                "reply_suggestion": reply_suggestion,
-                "session_title_suggestion": session_title_suggestion,
             }
 
         # 4. 更新状态
@@ -228,8 +219,6 @@ class ChatFlowService:
 
         return {
             "messages": state["messages"],
-            "reply_suggestion": response.reply_suggestion,
-            "session_title_suggestion": response.session_title_suggestion,
         }
 
     def invoke(self, user_input: str, history: List[AnyMessage] = None) -> Dict[str, Any]:
@@ -259,8 +248,6 @@ class ChatFlowService:
         
         return {
             "response": final_message,
-            "session_title": final_state.get("session_title_suggestion"),
-            "reply_suggestions": final_state.get("reply_suggestion"),
             "thought_process": final_state.get("thought"),
             "tool_results": final_state.get("tool_results"),
             "full_history": final_state["messages"]
