@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from aigility.chat_flow.schema import LLMConfig
 
 class ChatRequest(BaseModel):
     """用户发送的聊天请求模型"""

@@ -1,17 +1,22 @@
 import uuid
 from typing import List, Dict, Any
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel as LangchainBaseModel, Field as LangchainField
 from aigility.chat.schema import ChatRequest, ChatResponse
-from aigility.chat_flow import ChatFlowService, ChatFlowState
+from aigility.chat_flow import ChatFlowService, LLMConfig
 
 class ChatService:
     """
     Chat 模块的服务层，负责处理聊天请求，并调用 ChatFlowService。
     """
-    def __init__(self):
-        # 初始化 ChatFlowService
-        # 注意：由于没有实现 CheckpointSaver，每次调用都是无状态的，
-        # 历史记录需要由调用方（如 API 层）传入。
-        self.chat_flow_service = ChatFlowService()
+    def __init__(self, llm_config: LLMConfig = LLMConfig()):
+        # 初始化 LLM 配置
+        self.llm_config = llm_config
+        self.llm = self.llm_config.get_client()
+        
+        # 初始化 ChatFlowService，注入 LLM 配置
+        self.chat_flow_service = ChatFlowService(llm_config=self.llm_config)
 
     def process_chat(self, request: ChatRequest) -> ChatResponse:
         """
@@ -43,18 +48,24 @@ class ChatService:
         
         # 格式化工具结果
         tool_results_list = []
+        if flow_result.get("tool_result        # 格式化工具结果
+        tool_results_list = []
         if flow_result.get("tool_results"):
             for tr in flow_result["tool_results"]:
                 tool_results_list.append({
                     "tool_name": tr.tool_name,
                     "result": tr.result
                 })
+        
+        # 独立调用标题和建议生成方法
+        session_title = self.generate_session_title(request.user_input, flow_result["response"])
+        reply_suggestions = self.generate_reply_suggestions(flow_result["response"])
 
         # 构建 ChatResponse
         response = ChatResponse(
             response=flow_result["response"],
             session_id=session_id,
-            session_title=flow_result.get("session_title"),
+            session_title=session_title,
             reply_suggestions=reply_suggestions,
             thought_process=flow_result.get("thought_process"),
             tool_results=tool_results_list
@@ -62,36 +73,48 @@ class ChatService:
         
         return response
 
-# --- 辅助函数：生成会话标题和回复建议的接口 ---
+    # --- 独立服务：生成会话标题 ---
 
     def generate_session_title(self, user_input: str, ai_response: str) -> str:
         """
-        生成会话标题的接口（通过调用 ChatFlowService 的逻辑实现）。
+        即插即用的独立方法：根据对话内容生成会话标题。
         """
-        # 实际应用中，可以调用一个简化的 LLM 链或复用 ChatFlowService 中的逻辑
-        # 由于 ChatFlowService.invoke 已经返回了 session_title，这里可以简化
-        # 但为了模拟一个独立的接口，我们可以在 ChatFlowService 中添加一个专门的链
-        # 考虑到通用性，我们直接使用 ChatFlowService.invoke 的结果
+        class TitleOutput(LangchainBaseModel):
+            title: str = LangchainField(description="A concise session title (max 15 characters).")
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一个专业的标题生成器。请根据用户输入和AI回复，生成一个简洁的会话标题（不超过15个字）。"),
+            ("human", f"用户输入: {user_input}\nAI回复: {ai_response}")
+        ])
         
-        # 模拟一个简化的调用，只关注标题生成
-        # 实际生产中，会有一个专门的、更轻量的 LLM 调用
+        chain = prompt | self.llm.with_structured_output(TitleOutput)
         
-        # 再次调用 ChatFlowService (效率较低，仅为演示接口存在)
-        flow_result = self.chat_flow_service.invoke(user_input=user_input)
-        return flow_result.get("session_title", "新会话")
+        try:
+            result = chain.invoke({})
+            return result.title
+        except Exception as e:
+            print(f"Title generation failed: {e}")
+            return "新会话"
+
+    # --- 独立服务：生成回复建议 ---
 
     def generate_reply_suggestions(self, ai_response: str) -> List[str]:
         """
-        生成回复建议的接口（通过调用 ChatFlowService 的逻辑实现）。
+        即插即用的独立方法：根据 AI 回复生成后续回复建议。
         """
-        # 再次调用 ChatFlowService (效率较低，仅为演示接口存在)
-        # 实际生产中，会有一个专门的、更轻量的 LLM 调用
+        class SuggestionOutput(LangchainBaseModel):
+            suggestions: List[str] = LangchainField(description="A list of 3 suggested follow-up questions or actions.")
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "你是一个专业的建议生成器。请根据AI的回复，生成3个用户可能感兴趣的后续问题或操作建议。"),
+            ("human", f"AI回复: {ai_response}")
+        ])
         
-        # 模拟一个简化的调用，只关注建议生成
-        flow_result = self.chat_flow_service.invoke(user_input="请根据以下回复生成3个后续问题建议：" + ai_response)
+        chain = prompt | self.llm.with_structured_output(SuggestionOutput)
         
-        reply_suggestions = []
-        if flow_result.get("reply_suggestions"):
-            reply_suggestions = [s.strip() for s in flow_result["reply_suggestions"].split(',') if s.strip()]
-            
-        return reply_suggestions
+        try:
+            result = chain.invoke({})
+            return result.suggestions
+        except Exception as e:
+            print(f"Suggestion generation failed: {e}")
+            return ["请重试", "报告错误"]

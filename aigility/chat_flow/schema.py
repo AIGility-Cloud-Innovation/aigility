@@ -1,6 +1,6 @@
 from typing import List, Annotated, TypedDict, Optional
 from langgraph.graph.message import AnyMessage, add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 # --- 1. 工具定义 ---
 class ToolCall(BaseModel):
@@ -14,6 +14,32 @@ class ToolResult(BaseModel):
     result: str = Field(..., description="The output or result from the tool.")
 
 # --- 2. Graph State 定义 ---
+# --- 4. LLM 配置模型 ---
+class LLMConfig(BaseModel):
+    """LLM Configuration for ChatFlow and related services."""
+    model_name: str = Field("gpt-4.1-mini", description="The name of the LLM model to use.")
+    base_url: Optional[str] = Field(None, description="The base URL for the OpenAI-compatible API.")
+    api_key: Optional[str] = Field(None, description="The API key for the OpenAI-compatible API.")
+    temperature: float = Field(0.0, description="The sampling temperature for the LLM.")
+    
+    # Private attribute to store the initialized ChatOpenAI client
+    _client: Any = PrivateAttr()
+
+    def get_client(self):
+        """Initializes and returns the ChatOpenAI client."""
+        from langchain_openai import ChatOpenAI
+        if not hasattr(self, "_client") or self._client is None:
+            # Use environment variables if base_url and api_key are not provided
+            # Note: In the sandbox, OPENAI_API_KEY is pre-configured.
+            self._client = ChatOpenAI(
+                model=self.model_name,
+                openai_api_base=self.base_url,
+                openai_api_key=self.api_key,
+                temperature=self.temperature
+            )
+        return self._client
+
+# --- 5. Graph State 定义 ---
 class ChatFlowState(TypedDict):
     """
     Represents the state of the LangGraph chat flow.
