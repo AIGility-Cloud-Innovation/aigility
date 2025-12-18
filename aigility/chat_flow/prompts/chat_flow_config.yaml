@@ -23,7 +23,7 @@ agent_decision_prompt: |
   请用中文详细描述你的思考过程。你需要判断：
   - 用户的核心意图是什么？
   - 当前信息是否足够？
-  - 如果信息不足，应该调用哪个工具（RAGTool 或 WebSearchTool）？
+  - 如果信息不足，应该调用哪个工具（RAGTool 或 WebSearchTool）？可以先调用RAGTool工具进行内部搜索，如果无法回答则可以 用WebSearchTool工具进行互联网搜索。
   - 如果调用工具，查询语句应该是什么？
   
   **2. 工具调用 (Tool Call):**

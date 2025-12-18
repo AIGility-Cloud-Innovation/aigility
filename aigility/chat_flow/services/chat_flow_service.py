@@ -1,14 +1,25 @@
 import yaml
 import os
+import sys
 import json
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+
+# --- 0. 路径补丁：确保直接运行脚本时能找到 aigility 包 ---
+# 获取当前文件的父目录（aigility/chat_flow/services）
+current_file_dir = os.path.dirname(os.path.abspath(__file__))
+# 获取项目根目录（aigility-master）
+root_dir = os.path.abspath(os.path.join(current_file_dir, "..", "..", ".."))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import AnyMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
-
+from aigility.rag.service import RAGService
 from aigility.chat_flow.schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, get_tool_names, get_tool_schema_map, LLMConfig
 
 # --- 1. 辅助函数：加载配置 ---
@@ -29,12 +40,13 @@ class ChatFlowService:
     一个即插即用的 LangGraph ChatFlow 服务。
     实现了 CoT、RAG 和 Web Search 的交互逻辑。
     """
-    def __init__(self, llm_config: LLMConfig = LLMConfig(), checkpoint: Optional[BaseCheckpointSaver] = None):
+    def __init__(self, rag_service: Optional[RAGService] = None,llm_config: LLMConfig = LLMConfig( provider="dashscope", model_name="qwen3-max"), checkpoint: Optional[BaseCheckpointSaver] = None):
         self.config = CONFIG
         self.llm_config = llm_config
         self.llm = self.llm_config.get_client()
         self.tools = get_tool_schema_map()
         self.graph = self._build_graph(checkpoint)
+        self.rag_service = rag_service
 
     def _build_graph(self, checkpoint: Optional[BaseCheckpointSaver]):
         """构建 LangGraph 状态机。"""
@@ -77,8 +89,9 @@ class ChatFlowService:
         print("--- Executing Agent Decision Node ---")
         
         # 1. 准备 Prompt
+        tool_desc = get_tool_descriptions().replace("{", "{{").replace("}", "}}")
         system_prompt = self.config["system_prompt"].format(
-            tool_descriptions=get_tool_descriptions()
+            tool_descriptions=tool_desc
         )
         decision_prompt = self.config["agent_decision_prompt"]
         
@@ -86,9 +99,12 @@ class ChatFlowService:
         history = "\n".join([f"{m.type.capitalize()}: {m.content}" for m in state["messages"][:-1]])
         user_input = state["messages"][-1].content
         
+        # 2. 构造消息列表并创建 Prompt
+        # 使用 template_format="mustache" 或类似方式可以避开解析，
+        # 但最简单的做法是直接传入已经格式化好的字符串，并告诉 LangChain 不要再解析变量
         prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", decision_prompt.format(history=history, input=user_input))
+            ("system", system_prompt.replace("{", "{{").replace("}", "}}")),
+            ("human", decision_prompt.format(history=history, input=user_input).replace("{", "{{").replace("}", "}}"))
         ])
 
         # 2. 绑定工具和解析器
@@ -147,7 +163,17 @@ class ChatFlowService:
             
             # 实际应用中，这里会调用真实的 RAG 或 Web Search API
             if tool_name == "RAGTool":
-                result = f"RAG Search Result for '{query}': 找到关于 {query} 的内部知识库片段。"
+                # [修改点3] 使用注入的 rag_service
+                if self.rag_service:
+                    print(f"🔍 调用 RAGService 检索: {query}")
+                    # 调用 RAG 模块的 search 方法
+                    search_content = self.rag_service.search(query)
+                    if search_content:
+                        result = f"RAG 知识库检索结果:\n{search_content}"
+                    else:
+                        result = f"RAG 知识库中没有找到关于 '{query}' 的信息。"
+                else:
+                    result = "Error: RAGService 未初始化，无法检索知识库。"
             elif tool_name == "WebSearchTool":
                 result = f"Web Search Result for '{query}': 找到关于 {query} 的最新互联网信息。"
             else:
@@ -178,6 +204,8 @@ class ChatFlowService:
         user_input = state["messages"][-1].content
         thought = state.get("thought", "无")
         tool_results_str = "\n".join([f"[{tr.tool_name}]: {tr.result}" for tr in state.get("tool_results", [])])
+        # 对工具结果进行转义，防止其中包含 JSON 导致解析失败
+        tool_results_str = tool_results_str.replace("{", "{{").replace("}", "}}")
         if not tool_results_str:
             tool_results_str = "无工具调用结果。"
 
@@ -191,7 +219,7 @@ class ChatFlowService:
                 tool_results=tool_results_str,
                 history=history,
                 input=user_input
-            ))
+            ).replace("{", "{{").replace("}", "}}"))
         ])
         
         chain = prompt | self.llm.with_structured_output(FinalOutput)
@@ -256,6 +284,28 @@ class ChatFlowService:
 # --- 4. 示例使用 ---
 if __name__ == "__main__":
     # 示例 1: 需要 RAG 的问题
+    rag_service = RAGService()
+    # ------------------------------
+    # 如果切换为 DashScope + FIASS
+    # ------------------------------
+    '''
+    from aigility.rag.config import VectorStoreConfig
+    from aigility.rag.config import EmbeddingConfig
+    embedding_config = EmbeddingConfig(
+        provider="dashscope",
+        model_name="text-embedding-v4",
+        api_key=os.getenv("DASHSCOPE_API_KEY")
+    )
+    vector_store_config = VectorStoreConfig(
+        provider="faiss",
+        path="./faiss_db"
+    )
+    config = RAGConfig(embedding=embedding_config, vector_store=vector_store_config)
+    service = RAGService(config=config)
+    service.add_file("./test.txt")
+    print(service.search("公司最新的休假政策是什么？"))
+    '''
+    rag_service.add_file("./test.txt")
     print("="*50)
     print("示例 1: 需要 RAG 的问题 (关于内部知识库)")
     print("="*50)
@@ -263,8 +313,6 @@ if __name__ == "__main__":
     result1 = flow_service.invoke("请告诉我公司最新的休假政策是什么？")
     print("\n--- 最终结果 ---")
     print(f"Response: {result1['response']}")
-    print(f"Title: {result1['session_title']}")
-    print(f"Suggestions: {result1['reply_suggestions']}")
     print(f"Thought: {result1['thought_process']}")
     
     # 示例 2: 需要 Web Search 的问题
@@ -274,8 +322,6 @@ if __name__ == "__main__":
     result2 = flow_service.invoke("2025年诺贝尔物理学奖得主是谁？")
     print("\n--- 最终结果 ---")
     print(f"Response: {result2['response']}")
-    print(f"Title: {result2['session_title']}")
-    print(f"Suggestions: {result2['reply_suggestions']}")
     print(f"Thought: {result2['thought_process']}")
     
     # 示例 3: 不需要工具的简单问题
@@ -285,6 +331,4 @@ if __name__ == "__main__":
     result3 = flow_service.invoke("你好，你叫什么名字？")
     print("\n--- 最终结果 ---")
     print(f"Response: {result3['response']}")
-    print(f"Title: {result3['session_title']}")
-    print(f"Suggestions: {result3['reply_suggestions']}")
     print(f"Thought: {result3['thought_process']}")

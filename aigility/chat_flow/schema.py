@@ -1,4 +1,4 @@
-from typing import List, Annotated, TypedDict, Optional
+from typing import List, Annotated, TypedDict, Optional,Any
 from langgraph.graph.message import AnyMessage, add_messages
 from pydantic import BaseModel, Field, PrivateAttr
 
@@ -17,28 +17,44 @@ class ToolResult(BaseModel):
 # --- 4. LLM 配置模型 ---
 class LLMConfig(BaseModel):
     """LLM Configuration for ChatFlow and related services."""
+    provider: str = Field("openai", description="The LLM provider (openai or dashscope).")
     model_name: str = Field("gpt-4.1-mini", description="The name of the LLM model to use.")
-    base_url: Optional[str] = Field(None, description="The base URL for the OpenAI-compatible API.")
-    api_key: Optional[str] = Field(None, description="The API key for the OpenAI-compatible API.")
+    base_url: Optional[str] = Field(None, description="The base URL for the API.")
+    api_key: Optional[str] = Field(None, description="The API key for the API.")
     temperature: float = Field(0.0, description="The sampling temperature for the LLM.")
     
-    # Private attribute to store the initialized ChatOpenAI client
+    # Private attribute to store the initialized client
     _client: Any = PrivateAttr()
 
     def get_client(self):
-        """Initializes and returns the ChatOpenAI client."""
-        from langchain_openai import ChatOpenAI
+        """Initializes and returns the LLM client."""
         if not hasattr(self, "_client") or self._client is None:
-            # Use environment variables if base_url and api_key are not provided
-            # Note: In the sandbox, OPENAI_API_KEY is pre-configured.
-            self._client = ChatOpenAI(
-                model=self.model_name,
-                openai_api_base=self.base_url,
-                openai_api_key=self.api_key,
-                temperature=self.temperature
-            )
-        return self._client
+            # 统一使用 ChatOpenAI 客户端，因为它功能最全（支持 structured_output）
+            from langchain_openai import ChatOpenAI
+            import os
 
+            if self.provider == "dashscope":
+                # 使用 DashScope 的 OpenAI 兼容模式
+                base_url = self.base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+                api_key = self.api_key or os.getenv("DASHSCOPE_API_KEY")
+                
+                self._client = ChatOpenAI(
+                    model=self.model_name,
+                    openai_api_key=api_key,
+                    openai_api_base=base_url,
+                    temperature=self.temperature,
+                    # 关键点：通过 extra_body 开启深度思考，这样既保留了 SDK 特性，又兼容了 LangChain
+
+                )
+            else:
+                # 原有的标准 OpenAI 逻辑
+                self._client = ChatOpenAI(
+                    model=self.model_name,
+                    openai_api_base=self.base_url,
+                    openai_api_key=self.api_key,
+                    temperature=self.temperature
+                )
+        return self._client
 # --- 5. Graph State 定义 ---
 class ChatFlowState(TypedDict):
     """
@@ -57,7 +73,7 @@ class ChatFlowState(TypedDict):
     tool_results: List[ToolResult]
     
     # 最终回复建议（用于生成回复建议接口）
-    reply_suggestion: Optional[str]
+    reply_suggestion: Optional[str] 
     
     # 会话标题建议（用于生成会话标题接口）
     session_title_suggestion: Optional[str]
