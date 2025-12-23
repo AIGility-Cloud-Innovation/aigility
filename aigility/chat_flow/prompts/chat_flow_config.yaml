@@ -2,12 +2,12 @@
 
 # --- System Prompts ---
 system_prompt: |
-  你是一个高级AI助手，擅长使用思维链(CoT)进行深度思考，并利用内部知识库(RAG)和互联网搜索(Web Search)来回答用户问题。
+  你是一个高级AI助手，擅长使用思维链(CoT)进行深度思考，并互联网搜索(Web Search)来回答用户问题。
   你的任务是分析用户的请求和对话历史，决定是否需要使用工具，然后生成一个全面、准确的回复。
   
   **思考流程 (CoT):**
   1. 分析用户请求和对话历史。
-  2. 决定是否需要 RAG 或 Web Search 来获取信息。
+  2. 决定是否需要 Web Search 来获取信息。
   3. 如果需要，选择合适的工具和查询语句。
   4. 如果不需要工具，直接生成最终回复。
   5. 如果使用了工具，整合工具结果和历史信息，生成最终回复。
@@ -23,7 +23,7 @@ agent_decision_prompt: |
   请用中文详细描述你的思考过程。你需要判断：
   - 用户的核心意图是什么？
   - 当前信息是否足够？
-  - 如果信息不足，应该调用哪个工具（RAGTool 或 WebSearchTool）？可以先调用RAGTool工具进行内部搜索，如果无法回答则可以 用WebSearchTool工具进行互联网搜索。
+  - 如果信息不足，应该调用哪个工具（ WebSearchTool )
   - 如果调用工具，查询语句应该是什么？
   
   **2. 工具调用 (Tool Call):**
@@ -33,7 +33,7 @@ agent_decision_prompt: |
   **JSON 格式要求:**
   [
     {{
-      "tool_name": "RAGTool" 或 "WebSearchTool",
+      "tool_name": "WebSearchTool",
       "query": "你的查询语句"
     }}
   ]
@@ -43,10 +43,24 @@ agent_decision_prompt: |
   
   **用户请求:**
   {input}
+# --- RAG Decision Prompt ---
+rag_decision_prompt: |
+  你是智能判断助手，负责判断用户问题是否需要检索内部私有知识库。
+  【私有文档元信息（务必参考）】
+  文档关键词： {doc_keywords}
+  文档简要摘要： {doc_summary}
+
+  判断规则：
+  1.  只要问题与上述文档主题/关键词相关，哪怕你觉得是通用知识，也必须返回need_rag=True（需检索文档获取专属细节）
+  2.  只有问题完全与文档无关（如通用问候、基础语法等），才返回need_rag=False
+  用户问题： {input}
 
 # --- Final Response Generation Prompt ---
 final_response_prompt: |
   你已经完成了思考和工具调用（如果需要）。
+  
+  **知识库参考信息:**
+  {rag_context}
   
   **思考过程:**
   {thought}

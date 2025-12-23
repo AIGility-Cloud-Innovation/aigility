@@ -14,7 +14,7 @@ class ToolResult(BaseModel):
     result: str = Field(..., description="The output or result from the tool.")
 
 # --- 2. Graph State 定义 ---
-# --- 4. LLM 配置模型 ---
+# --- LLM 配置模型 ---
 class LLMConfig(BaseModel):
     """LLM Configuration for ChatFlow and related services."""
     provider: str = Field("openai", description="The LLM provider (openai or dashscope).")
@@ -55,6 +55,13 @@ class LLMConfig(BaseModel):
                     temperature=self.temperature
                 )
         return self._client
+    
+# --- use_rag类 ---
+class RAGMode:
+    ON="on"
+    OFF="off"
+    AUTO="auto"
+    
 # --- 5. Graph State 定义 ---
 class ChatFlowState(TypedDict):
     """
@@ -77,6 +84,11 @@ class ChatFlowState(TypedDict):
     
     # 会话标题建议（用于生成会话标题接口）
     session_title_suggestion: Optional[str]
+    
+    # 新增 RAG 相关字段
+    rag_context: Optional[str]       # RAG 检索结果
+    rag_needed: Optional[bool]       # auto 模式下 LLM 的判断结果
+
 
 # --- 3. 核心工具定义（模拟） ---
 # 实际应用中，这些会是真实的 RAG 和 Web Search 函数

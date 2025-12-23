@@ -1,8 +1,8 @@
 import os
 import sys
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import uuid
-from typing import List, Dict, Any,Optional
+from typing import List, Literal, Any,Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel as LangchainBaseModel, Field as LangchainField
@@ -24,18 +24,18 @@ class ChatService:
     """
     Chat 模块的服务层，负责处理聊天请求，并调用 ChatFlowService。
     """
-    def __init__(self, llm_config: LLMConfig = LLMConfig(),rag_config: Optional[RAGConfig] = None):
+    def __init__(self, llm_config: LLMConfig = LLMConfig(),rag_config: Optional[RAGConfig] = None,use_rag: Literal["on", "off", "auto"] = "off"):
         # 初始化 LLM 配置
         self.llm_config = llm_config
         self.llm = self.llm_config.get_client()
-       
+        
         
         self.rag_config = rag_config if rag_config else RAGConfig()
         print(f"🔧 ChatService 初始化 RAG: Embedding={self.rag_config.embedding.provider}, Store={self.rag_config.vector_store.provider}")
         
         self.rag_service = RAGService(config=self.rag_config)
         # 初始化 ChatFlowService，注入 LLM 配置和 RAG 配置
-        self.chat_flow_service = ChatFlowService(llm_config=self.llm_config,rag_service=self.rag_service )
+        self.chat_flow_service = ChatFlowService(llm_config=self.llm_config,rag_service=self.rag_service,use_rag=use_rag )
         
     def add_knowledge(self, file_path: str):
         """
@@ -167,7 +167,7 @@ class ChatService:
 # 集成测试入口
 # ==========================================
 if __name__ == "__main__":
-    print("🚀 启动 ChatService 集成测试...")
+    print("🚀 启动 ChatService 集成测试... 【测试 rag 状态为auto：总是不执行 RAG，而是让 LLM 判断是否需要执行 RAG】")
 
     # --- 1. 配置准备 ---
     # 模拟用户根据 `config.py` 的结构自定义配置
@@ -211,17 +211,17 @@ if __name__ == "__main__":
     )
     
     # 初始化 ChatService
-    agent = ChatService(llm_config=my_llm_config, rag_config=my_rag_config)
+    agent = ChatService(llm_config=my_llm_config, rag_config=my_rag_config,use_rag="auto")
 
     # --- 3. 准备测试数据 ---
-    test_file = "test.txt"
+    test_file = "test.pdf"
     # --- 4. 执行数据入库 ---
     print("\n--- [Step 1] 灌入知识库 ---")
     agent.add_knowledge(test_file)
 
     # --- 5. 执行对话 ---
     print("\n--- [Step 2] 发起对话 ---")
-    question = "根据RAG，A公司最新的休假政策是什么？"
+    question = "面试一般考察什么"
     req = ChatRequest(user_input=question)
     
     result = agent.process_chat(req)

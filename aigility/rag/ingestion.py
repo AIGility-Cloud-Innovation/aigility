@@ -209,7 +209,7 @@ if __name__ == "__main__":
     ingestion_manager = IngestionManager(config)
     
     try:
-        processed_docs = ingestion_manager.process_documents("./test.txt")
+        processed_docs = ingestion_manager.process_documents("./test.pdf")
         print(f"✅ 处理完成，生成 {len(processed_docs)} 个有效Chunk")
         for i, doc in enumerate(processed_docs):
             print(f"\n=== Chunk {i+1} ===")

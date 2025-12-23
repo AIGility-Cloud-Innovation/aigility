@@ -42,7 +42,7 @@ class RAGConfig(BaseModel):
     embedding: EmbeddingConfig = EmbeddingConfig()
     vector_store: VectorStoreConfig = VectorStoreConfig()
     ingestion: IngestionConfig = IngestionConfig()
-    search_top_k: int = 3
+    search_top_k: int = 5
 
 __all__ = [
     "RAGConfig", "EmbeddingConfig", "VectorStoreConfig", "IngestionConfig",
