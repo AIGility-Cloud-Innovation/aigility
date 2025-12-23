@@ -17,7 +17,7 @@ from aigility.rag.vector_stores.factory import VectorStoreFactory
 from aigility.rag.ingestion import IngestionManager
 
 
-# 后续代码不变...
+
 
 class RAGService:
     def __init__(self, config: RAGConfig = None):

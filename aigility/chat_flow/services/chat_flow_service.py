@@ -156,17 +156,14 @@ class ChatFlowService:
         tool_calls: List[ToolCall] = state["tool_calls"]
         tool_results: List[ToolResult] = []
 
-        # 模拟工具执行
+        # 工具执行
         for tc in tool_calls:
             tool_name = tc.tool_name
             query = tc.query
-            
-            # 实际应用中，这里会调用真实的 RAG 或 Web Search API
+            # 调用 RAG 模块的检索工具
             if tool_name == "RAGTool":
-                # [修改点3] 使用注入的 rag_service
                 if self.rag_service:
                     print(f"🔍 调用 RAGService 检索: {query}")
-                    # 调用 RAG 模块的 search 方法
                     search_content = self.rag_service.search(query)
                     if search_content:
                         result = f"RAG 知识库检索结果:\n{search_content}"
@@ -174,6 +171,7 @@ class ChatFlowService:
                         result = f"RAG 知识库中没有找到关于 '{query}' 的信息。"
                 else:
                     result = "Error: RAGService 未初始化，无法检索知识库。"
+            # 模拟调用 web 搜索工具
             elif tool_name == "WebSearchTool":
                 result = f"Web Search Result for '{query}': 找到关于 {query} 的最新互联网信息。"
             else:
