@@ -167,7 +167,7 @@ class ChatService:
 # 集成测试入口
 # ==========================================
 if __name__ == "__main__":
-    print("🚀 启动 ChatService 集成测试... 【测试 rag 状态为auto：总是不执行 RAG，而是让 LLM 判断是否需要执行 RAG】")
+    print("🚀 启动 ChatService 集成测试... 【测试 rag 状态为on：总是执行 RAG】")
 
     # --- 1. 配置准备 ---
     # 模拟用户根据 `config.py` 的结构自定义配置
@@ -211,7 +211,7 @@ if __name__ == "__main__":
     )
     
     # 初始化 ChatService
-    agent = ChatService(llm_config=my_llm_config, rag_config=my_rag_config,use_rag="auto")
+    agent = ChatService(llm_config=my_llm_config, rag_config=my_rag_config,use_rag="on")
 
     # --- 3. 准备测试数据 ---
     test_file = "test.pdf"

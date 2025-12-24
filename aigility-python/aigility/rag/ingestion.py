@@ -1,23 +1,35 @@
+# ingestion.py
+"""
+文档解析与切分管理器
+
+使用前需要安装相应的文档处理依赖:
+- PDF: pip install pypdf
+- Word: pip install docx2txt
+- Markdown: pip install unstructured
+- Excel: pip install unstructured openpyxl
+"""
+
 import os
 import re
-from typing import List, Optional, Dict
+from typing import List, Dict, TYPE_CHECKING
 from hashlib import md5
-from langchain_community.document_loaders import (
-    PyPDFLoader, TextLoader, UnstructuredMarkdownLoader,
-    Docx2txtLoader, UnstructuredExcelLoader
-)
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
+
+if TYPE_CHECKING:
+    from langchain_core.documents import Document
+
 from .config import IngestionConfig
+
 
 class IngestionManager:
     """通用文档解析与切分管理器"""
+    
     def __init__(self, config: IngestionConfig):
         self.config = config
+        self._splitter = None
         
-        # 1. 通用分层分隔符
+        # 通用分层分隔符
         self.universal_separators = [
-            r"\n#{1,6} ",          # Markdown标题
+            r"\n#{1,6} ",          # Markdown 标题
             r"\n[一二三四五六七八九十]{1,2}、",  # 中文数字标题
             r"\n\d{1,2}[.、]",      # 阿拉伯数字标题
             r"\n\[.*?\]\n",        # 方括号标签
@@ -26,20 +38,45 @@ class IngestionManager:
             " ", "\t", "",  # 字符分隔符
         ]
         
-        # 2. 初始化拆分器
-        self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.config.chunk_size,
-            chunk_overlap=self.config.chunk_overlap,
-            separators=self.universal_separators,
-            length_function=len
-        )
-        
-        # 3. 去重缓存
+        # 去重缓存
         self.duplicate_cache: Dict[str, set] = {}
 
+    @property
+    def splitter(self):
+        """延迟初始化拆分器"""
+        if self._splitter is None:
+            try:
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+            except ImportError:
+                raise ImportError(
+                    "使用文档切分功能需要安装: "
+                    "pip install langchain-text-splitters"
+                )
+            
+            self._splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap,
+                separators=self.universal_separators,
+                length_function=len
+            )
+        return self._splitter
+
     def _get_loader(self, file_path: str):
-        """通用文件加载器"""
+        """通用文件加载器（延迟导入）"""
         ext = os.path.splitext(file_path)[-1].lower()
+        
+        # 延迟导入
+        try:
+            from langchain_community.document_loaders import (
+                PyPDFLoader, TextLoader, UnstructuredMarkdownLoader,
+                Docx2txtLoader, UnstructuredExcelLoader
+            )
+        except ImportError:
+            raise ImportError(
+                "使用文档加载功能需要安装: "
+                "pip install langchain-community"
+            )
+        
         loader_map = {
             ".txt": TextLoader,
             ".pdf": PyPDFLoader,
@@ -49,8 +86,12 @@ class IngestionManager:
             ".xlsx": UnstructuredExcelLoader,
             ".xls": UnstructuredExcelLoader
         }
+        
         if ext not in loader_map:
-            raise ValueError(f"Unsupported file type: {ext}, supported types: {list(loader_map.keys())}")
+            raise ValueError(
+                f"Unsupported file type: {ext}, "
+                f"supported types: {list(loader_map.keys())}"
+            )
         
         loader_cls = loader_map[ext]
         if ext == ".txt":
@@ -58,9 +99,8 @@ class IngestionManager:
         else:
             return loader_cls(file_path)
 
-    def load_file(self, file_path: str) -> List[Document]:
-        """加载文件，返回原始Document列表"""
-        # 核心修复：添加路径类型校验
+    def load_file(self, file_path: str) -> List["Document"]:
+        """加载文件，返回原始 Document 列表"""
         if not isinstance(file_path, str):
             raise TypeError(f"file_path must be str, got {type(file_path)}")
         
@@ -73,6 +113,7 @@ class IngestionManager:
             ext = os.path.splitext(file_path)[-1].lower()
             loader = self._get_loader(file_path)
             docs = loader.load()
+            
             # 补充元数据
             for doc in docs:
                 doc.metadata.update({
@@ -92,12 +133,16 @@ class IngestionManager:
         
         text = re.sub(r"\s+", " ", text)
         text = re.sub(r"[\x00-\x1f\x7f]", "", text)
-        text = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9\s\.\,，。！？；：（）()【】《》、\-_=+*&^%$#@!~`·]", "", text)
+        text = re.sub(
+            r"[^\u4e00-\u9fa5a-zA-Z0-9\s\.\,，。！？；：（）()【】《》、\-_=+*&^%$#@!~`·]",
+            "",
+            text
+        )
         text = re.sub(r"([.。！？；：]){2,}", r"\1", text)
         text = re.sub(r"^\s+|\s+$", "", text)
         return text
 
-    def _remove_duplicate(self, docs: List[Document], file_key: str) -> List[Document]:
+    def _remove_duplicate(self, docs: List["Document"], file_key: str) -> List["Document"]:
         """去重"""
         if not self.config.enable_duplicate_removal:
             return docs
@@ -119,7 +164,7 @@ class IngestionManager:
         
         return unique_docs
 
-    def _split_and_trim(self, docs: List[Document]) -> List[Document]:
+    def _split_and_trim(self, docs: List["Document"]) -> List["Document"]:
         """拆分+修剪"""
         split_docs = self.splitter.split_documents(docs)
         trimmed_docs = []
@@ -145,7 +190,7 @@ class IngestionManager:
         
         return trimmed_docs
 
-    def _add_universal_tag(self, docs: List[Document]) -> List[Document]:
+    def _add_universal_tag(self, docs: List["Document"]) -> List["Document"]:
         """添加结构化标签"""
         if not self.config.enable_structured_tag:
             return docs
@@ -170,9 +215,8 @@ class IngestionManager:
         
         return tagged_docs
 
-    # 核心修复1：拆分方法职责
-    def process_raw_docs(self, raw_docs: List[Document], file_path: str) -> List[Document]:
-        """处理已加载的原始Document列表（供RAGService调用）"""
+    def process_raw_docs(self, raw_docs: List["Document"], file_path: str) -> List["Document"]:
+        """处理已加载的原始 Document 列表（供 RAGService 调用）"""
         if not raw_docs:
             return []
         
@@ -192,28 +236,10 @@ class IngestionManager:
         
         return final_docs
 
-    # 核心修复2：保留原process_documents方法（供单独调用）
-    def process_documents(self, file_path: str) -> List[Document]:
+    def process_documents(self, file_path: str) -> List["Document"]:
         """完整流程：加载→处理（供单独使用）"""
         raw_docs = self.load_file(file_path)
         return self.process_raw_docs(raw_docs, file_path)
 
-# 测试代码
-if __name__ == "__main__":
-    config = IngestionConfig(
-        chunk_size=500,
-        chunk_overlap=50,
-        min_chunk_length=20,
-        max_chunk_length=1000
-    )
-    ingestion_manager = IngestionManager(config)
-    
-    try:
-        processed_docs = ingestion_manager.process_documents("./test.pdf")
-        print(f"✅ 处理完成，生成 {len(processed_docs)} 个有效Chunk")
-        for i, doc in enumerate(processed_docs):
-            print(f"\n=== Chunk {i+1} ===")
-            print(f"元数据：{doc.metadata}")
-            print(f"内容：{doc.page_content[:200]}...")
-    except Exception as e:
-        print(f"❌ 处理失败：{e}")
+
+__all__ = ["IngestionManager"]
