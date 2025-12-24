@@ -169,7 +169,7 @@ class IngestionConfig(BaseModel):
         enable_structured_tag: 是否添加结构化标签
     """
     chunk_size: int = Field(default=500, description="基础 chunk 长度")
-    chunk_overlap: int = Field(default=50, description="重叠长度")
+    chunk_overlap: int = Field(default=100, description="重叠长度")
     min_chunk_length: int = Field(default=20, description="最小 chunk 长度")
     max_chunk_length: int = Field(default=1000, description="最大 chunk 长度")
     enable_duplicate_removal: bool = Field(default=True, description="是否去重")
