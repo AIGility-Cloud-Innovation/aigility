@@ -73,7 +73,7 @@ temp/
 *.pickle
 *.db
 *.sqlite3
-
+*.json
 # ========== 模型文件（通常很大） ==========
 *.bin
 *.pt
