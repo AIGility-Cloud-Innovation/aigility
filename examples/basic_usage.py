@@ -203,8 +203,8 @@ def demo_user_profile():
             
             print(f"✓ 画像获取完成")
             
-    except Exception as e:
-            print(f"⚠ 画像获取失败: {e}")
+        except Exception as e:
+                print(f"⚠ 画像获取失败: {e}")
 
 
 def demo_batch_operations():
@@ -230,8 +230,8 @@ def demo_batch_operations():
                 success = result.get('success', False)
                 print(f"  - {domain}: {'成功' if success else '失败'}")
             
-    except Exception as e:
-            print(f"⚠ 批量学习失败: {e}")
+        except Exception as e:
+                print(f"⚠ 批量学习失败: {e}")
 
 
 def demo_health_check():

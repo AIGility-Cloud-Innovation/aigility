@@ -1,11 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from aigility.chat_flow.schema import LLMConfig
 
 class ChatRequest(BaseModel):
     """用户发送的聊天请求模型"""
     user_input: str = Field(..., description="用户输入的文本内容")
-    session_id: Optional[str] = Field(None, description="会话ID，用于恢复历史记录（当前版本暂不实现存储）")
+    session_id: Optional[str] = Field(None, description="会话ID，用于恢复历史记录")
     
 class ChatResponse(BaseModel):
     """聊天回复模型"""
