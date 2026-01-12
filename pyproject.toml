@@ -3,10 +3,11 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "timem-ai"
-version = "0.1.1"
-description = "TiMEM Python SDK - Time-based Memory Management and Experience Learning toolkit | TiMEM Python SDK - 时间记忆管理与经验学习工具包"
+name = "aigility"
+version = "0.0.2"
+description = "A modern Python ADK - Agent Development Kit for building AI agents with LangGraph and LangChain. This library provides a comprehensive, type-safe framework for developing intelligent agents with chat, workflow, memory, and knowledge management capabilities."
 readme = "README.md"
+requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
     {name = "AIGility Cloud Innovation", email = "contact@aigility.com"}
@@ -14,9 +15,9 @@ authors = [
 maintainers = [
     {name = "AIGility Cloud Innovation", email = "contact@aigility.com"}
 ]
-keywords = ["timem", "memory", "experience-learning", "rule-engine", "user-profile", "ai", "machine-learning"]
+keywords = ["adk", "agent", "langchain", "langgraph", "workflow", "chat", "rag", "memory", "ai", "llm"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -28,13 +29,15 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Database :: Database Engines/Servers",
 ]
-requires-python = ">=3.8"
 dependencies = [
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "typing-extensions>=4.0.0",
+    "langchain>=0.1.0",
+    "langgraph>=0.0.20",
+    "langchain-openai>=0.0.5",
+    "langchain-anthropic>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -55,45 +58,30 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/AIGility-Cloud-Innovation/timem-python"
-Documentation = "https://timem-python.readthedocs.io"
-Repository = "https://github.com/AIGility-Cloud-Innovation/timem-python"
-Issues = "https://github.com/AIGility-Cloud-Innovation/timem-python/issues"
-Changelog = "https://github.com/AIGility-Cloud-Innovation/timem-python/blob/main/CHANGELOG.md"
-
-[project.scripts]
-timem = "timem.cli:main"
+Homepage = "https://github.com/AIGility-Cloud-Innovation/aigility"
+Documentation = "https://aigility.readthedocs.io"
+Repository = "https://github.com/AIGility-Cloud-Innovation/aigility"
+Issues = "https://github.com/AIGility-Cloud-Innovation/aigility/issues"
+Changelog = "https://github.com/AIGility-Cloud-Innovation/aigility/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["timem*", "memory*"]
+include = ["adk*"]
+exclude = ["tests*", "examples*", "docs*"]
 
 [tool.setuptools.package-data]
-timem = ["py.typed"]
+adk = ["py.typed"]
 
 [tool.black]
 line-length = 88
 target-version = ['py38']
 include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["timem"]
+known_first_party = ["adk"]
 
 [tool.mypy]
 python_version = "3.8"
@@ -101,14 +89,6 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
-check_untyped_defs = true
-disallow_untyped_decorators = false
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
-strict_equality = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -121,33 +101,5 @@ addopts = [
     "--verbose",
     "--tb=short",
 ]
-markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
-]
 asyncio_mode = "auto"
 
-[tool.coverage.run]
-source = ["timem"]
-omit = [
-    "*/tests/*",
-    "*/test_*",
-    "*/__pycache__/*",
-    "*/venv/*",
-    "*/env/*",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if 0:",
-    "if __name__ == .__main__.:",
-    "class .*\\bProtocol\\):",
-    "@(abc\\.)?abstractmethod",
-]

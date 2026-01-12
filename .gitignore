@@ -29,7 +29,7 @@ Thumbs.db
 
 # Project specific
 *.bat
-*.md
+# *.md
 *.sh
 release/
 
