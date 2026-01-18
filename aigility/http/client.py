@@ -83,21 +83,48 @@ class HTTPClient:
             if headers:
                 request_headers.update(headers)
 
-            if self.api_key and "Authorization" not in request_headers and "X-API-Key" not in request_headers:
-                request_headers["Authorization"] = f"Bearer {self.api_key}"
+            if self.api_key and "X-API-Key" not in request_headers:
+                request_headers["X-API-Key"] = self.api_key
 
-            async with client.stream(
-                method=method,
-                url=endpoint,
-                json=data,
-                params=params,
-                headers=request_headers,
-                timeout=self.timeout,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line:
-                        yield line
+            # 调试日志
+            import logging
+            logger = logging.getLogger(__name__)
+            full_url = f"{self.base_url}{endpoint}"
+            logger.warning(f"🔍 ADP Stream Request: {method} {full_url}")
+            logger.warning(f"   Base URL: {self.base_url}")
+            logger.warning(f"   Endpoint: {endpoint}")
+            logger.warning(f"   Request data: {data}")
+
+            try:
+                async with client.stream(
+                    method=method,
+                    url=endpoint,
+                    json=data,
+                    params=params,
+                    headers=request_headers,
+                    timeout=self.timeout,
+                ) as response:
+                    logger.warning(f"✅ ADP Response Status: {response.status_code}")
+                    logger.warning(f"   Response headers: {dict(response.headers)}")
+
+                    response.raise_for_status()
+
+                    line_count = 0
+                    async for line in response.aiter_lines():
+                        if line:
+                            line_count += 1
+                            logger.warning(f"   📨 Line {line_count}: {line[:100]}...")
+                            yield line
+
+                    logger.warning(f"🏁 Stream ended. Total lines: {line_count}")
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"❌ HTTP Status Error: {e.response.status_code}")
+                logger.error(f"   Response: {e.response.text}")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Stream request error: {type(e).__name__}: {e}")
+                raise
 
     async def _do_request(
         self,
@@ -116,9 +143,9 @@ class HTTPClient:
             if headers:
                 request_headers.update(headers)
 
-            # 如果 self.api_key 存在，且 Authorization 或 X-API-Key 头未被显式设置，则添加默认的 Authorization 头
-            if self.api_key and "Authorization" not in request_headers and "X-API-Key" not in request_headers:
-                request_headers["Authorization"] = f"Bearer {self.api_key}"
+            # 如果 self.api_key 存在，且 X-API-Key 头未被显式设置，则添加 X-API-Key 头
+            if self.api_key and "X-API-Key" not in request_headers:
+                request_headers["X-API-Key"] = self.api_key
             
             response = await client.request(
                 method=method,
