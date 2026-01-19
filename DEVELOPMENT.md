@@ -3,36 +3,32 @@
 ## 项目结构
 
 ```
-adk/
+aigility/
 ├── core/           # 核心功能模块
-│   ├── base.py     # 基础抽象类
 │   ├── config.py   # 配置管理
 │   └── types.py    # 类型定义
 ├── http/           # HTTP 传输层
-│   ├── client.py   # HTTP 客户端
-│   ├── pool.py     # 连接池
-│   ├── circuit_breaker.py  # 熔断器
-│   └── retry.py    # 重试机制
+│   └── client.py   # HTTP 客户端
 ├── model/          # 模型层
-│   ├── llm.py      # LLM 提供者
-│   └── embeddings.py  # Embeddings 提供者
-├── utils/          # 工具函数
-│   ├── logger.py   # 日志工具
-│   └── workflow.py # 工作流工具
+│   └── llm.py      # LLM 提供者
 ├── memory/         # 记忆管理
 │   ├── client.py   # 记忆客户端
-│   ├── memory.py   # 记忆接口
-│   └── types.py    # 记忆类型
+│   └── memory.py   # 记忆接口
 ├── chat/           # 基础对话（基于 LangChain）
 │   └── agent.py    # 对话智能体
 ├── chatflow/       # 对话流管理（基于 LangGraph）
-│   └── flow.py     # 对话流
+│   └── service.py  # 对话流服务
 ├── workflow/       # 工作流引擎（基于 LangGraph）
 │   ├── engine.py   # 工作流引擎
 │   └── builder.py  # 工作流构建器
-├── knowledge/      # 知识库管理（RAG）
-│   ├── retriever.py  # 检索器
-│   └── store.py    # 知识库存储
+├── rag/            # RAG 检索增强生成
+│   ├── service.py  # RAG 服务
+│   ├── workflow.py # RAG 工作流（基于 LangGraph）
+│   ├── embeddings/ # Embedding 模型
+│   ├── vector_stores/ # 向量存储
+│   └── ingestion.py # 文档摄取
+├── adp/            # ADP 服务客户端
+│   └── client.py   # ADP 客户端
 └── client.py       # 主客户端接口
 ```
 
@@ -102,16 +98,20 @@ make lint
 
 基于 LangGraph 提供工作流引擎。
 
-### Knowledge 模块
+### RAG 模块
 
-提供 RAG（检索增强生成）能力。
+提供 RAG（检索增强生成）能力，包含：
+- **基础 RAG 服务**：文档摄取、向量化、语义检索
+- **工作流模式 RAG**：基于 LangGraph 的可组合 RAG 工作流
+- **多 Embedding 支持**：DashScope、HuggingFace 等
+- **多向量存储支持**：Chroma、FAISS、Milvus 等
 
 ## 使用示例
 
 ### 基础使用
 
 ```python
-from adk import ADKClient, create_client
+from aigility import ADKClient, create_client
 
 # 创建客户端
 client = create_client(
@@ -132,10 +132,53 @@ result = await memory.add(
 agent = client.create_chat_agent(name="my_agent")
 ```
 
+### RAG 使用
+
+```python
+from aigility.rag import RAGService, RAGConfig, EmbeddingConfig, VectorStoreConfig
+
+# 配置 RAG 服务
+config = RAGConfig(
+    embedding=EmbeddingConfig(provider="dashscope", api_key="your-api-key"),
+    vector_store=VectorStoreConfig(provider="chroma", persist_path="./my_db")
+)
+
+# 初始化服务
+rag_service = RAGService(config=config)
+
+# 添加文档
+rag_service.add_file("document.pdf")
+
+# 检索相关内容
+results = rag_service.search("什么是机器学习？")
+```
+
+### RAG 工作流模式
+
+```python
+from aigility.rag import RAGService, create_rag_workflow
+from langchain_openai import ChatOpenAI
+
+# 初始化 RAG 服务和 LLM
+rag_service = RAGService()
+llm = ChatOpenAI(model="gpt-4")
+
+# 创建工作流
+workflow = create_rag_workflow(rag_service, llm)
+
+# 执行查询
+result = workflow.invoke({
+    "query": "什么是机器学习？",
+    "messages": []
+})
+
+print(result["answer"])
+```
+
 ### 工作流使用
 
 ```python
-from adk.workflow import WorkflowEngine, WorkflowGraphBuilder
+from aigility.workflow import WorkflowEngine, WorkflowGraphBuilder
 
 # 构建工作流
 builder = WorkflowGraphBuilder()

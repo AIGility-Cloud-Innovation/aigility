@@ -10,7 +10,6 @@ from .memory import Memory
 from .chat import ChatAgent
 from .chatflow import ChatFlow
 from .workflow import WorkflowEngine
-from .knowledge import KnowledgeStore
 
 
 class ADKClient:
@@ -28,10 +27,9 @@ class ADKClient:
             config: ADK 配置
         """
         self.config = config or ADKConfig()
-        
+
         # 初始化各模块
         self._memory: Optional[Memory] = None
-        self._knowledge_store: Optional[KnowledgeStore] = None
     
     @property
     def memory(self) -> Memory:
@@ -125,17 +123,7 @@ class ADKClientBuilder:
         self.config.memory_api_key = api_key
         self.config.memory_base_url = base_url
         return self
-    
-    def with_knowledge(
-        self,
-        store_type: str = "vector",
-        enabled: bool = True
-    ) -> "ADKClientBuilder":
-        """配置知识库"""
-        self.config.knowledge_enabled = enabled
-        self.config.knowledge_store_type = store_type
-        return self
-    
+
     def with_http(
         self,
         timeout: float = 60.0,
@@ -162,23 +150,20 @@ class ADKClientBuilder:
 def create_client(**kwargs) -> ADKClient:
     """
     创建 ADK 客户端（快捷方式）
-    
+
     Args:
         **kwargs: 配置参数
-        
+
     Returns:
         ADK 客户端实例
     """
     builder = ADKClientBuilder()
-    
+
     if "llm_provider" in kwargs:
         builder.with_llm(**{k.replace("llm_", ""): v for k, v in kwargs.items() if k.startswith("llm_")})
-    
+
     if "memory_api_key" in kwargs:
         builder.with_memory(**{k.replace("memory_", ""): v for k, v in kwargs.items() if k.startswith("memory_")})
-    
-    if "knowledge_store_type" in kwargs:
-        builder.with_knowledge(**{k.replace("knowledge_", ""): v for k, v in kwargs.items() if k.startswith("knowledge_")})
-    
+
     return builder.build()
 
