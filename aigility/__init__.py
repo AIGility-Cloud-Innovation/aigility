@@ -5,7 +5,7 @@ AIGility ADK - Agent Development Kit
 - chat: 基础对话能力
 - chatflow: 对话流管理
 - workflow: 工作流引擎
-- knowledge: 知识库管理
+- rag: RAG 检索增强生成
 - memory: 记忆管理
 """
 
@@ -22,20 +22,20 @@ from . import memory
 from . import chat
 from . import chatflow
 from . import workflow
-from . import knowledge
+from . import rag
 
 __all__ = [
     # 主客户端
     "ADKClient",
     "create_client",
-    
+
     # 模块
     "memory",
     "chat",
     "chatflow",
     "workflow",
-    "knowledge",
-    
+    "rag",
+
     # 元信息
     "__version__",
     "__author__",
