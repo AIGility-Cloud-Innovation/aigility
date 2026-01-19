@@ -27,9 +27,66 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Project specific
+# ========== 向量数据库 ==========
+# Chroma
+chroma_db/
+chroma_data/
+
+# FAISS
+faiss_db/
+*.faiss
+*.index
+
+# Milvus
+milvus_data/
+
+# ========== 测试相关 ==========
+.pytest_cache/
+pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ========== 日志和临时文件 ==========
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.pdf
+
+# ========== 环境变量 ==========
+.env
+.env.local
+.env.*.local
+.envrc
+
+# ========== Jupyter Notebook ==========
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ========== 数据文件 ==========
+*.pkl
+*.pickle
+*.db
+*.sqlite3
+*.json
+# ========== 模型文件（通常很大） ==========
+*.bin
+*.pt
+*.pth
+*.onnx
+*.h5
+models/
+
+# ========== Project specific ==========
 *.bat
-*.md
 *.sh
 release/
 
+# 注意：如果你需要提交 README.md，请删除下面这行
+# *.md

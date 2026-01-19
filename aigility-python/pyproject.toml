@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aigility-python"
+version = "0.1.0"
+description = "Aigility Python SDK - 模块化 AI 能力库，提供 RAG、Chat、ChatFlow 等能力"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "AIGility Cloud Innovation", email = "contact@aigility.com"}
+]
+keywords = ["ai", "rag", "llm", "embedding", "vector-store", "chatbot"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.8"
+
+# 核心依赖（最小化）
+dependencies = [
+    "pydantic>=2.0.0",
+    "typing-extensions>=4.0.0",
+]
+
+[project.optional-dependencies]
+# RAG 模块依赖
+rag = [
+    "langchain-core>=0.1.0",
+    "langchain-community>=0.0.20",
+]
+
+# Embedding 模型依赖
+embedding-huggingface = [
+    "sentence-transformers>=2.2.0",
+    "langchain-huggingface>=0.0.1",
+]
+embedding-dashscope = [
+    "openai>=1.0.0",
+    "langchain-openai>=0.0.5",
+]
+
+# 向量库依赖
+vectorstore-chroma = [
+    "chromadb>=0.4.0",
+    "langchain-chroma>=0.1.0",
+]
+vectorstore-faiss = [
+    "faiss-cpu>=1.7.0",
+    "langchain-community>=0.0.20",
+]
+vectorstore-milvus = [
+    "pymilvus>=2.3.0",
+    "langchain-milvus>=0.1.0",
+]
+
+# 文档处理依赖
+doc-pdf = [
+    "pdfplumber>=0.9.0",
+]
+doc-word = [
+    "python-docx>=0.8.0",
+]
+nlp = [
+    "jieba>=0.42.0",
+    "scikit-learn>=1.0.0",
+]
+
+# 完整 RAG 功能（推荐）
+rag-full = [
+    "aigility-python[rag]",
+    "aigility-python[embedding-huggingface]",
+    "aigility-python[vectorstore-chroma]",
+    "aigility-python[doc-pdf]",
+    "aigility-python[doc-word]",
+    "aigility-python[nlp]",
+]
+
+# 开发依赖
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "black>=22.0.0",
+    "isort>=5.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/AIGility-Cloud-Innovation/aigility-python"
+Documentation = "https://aigility-python.readthedocs.io"
+Repository = "https://github.com/AIGility-Cloud-Innovation/aigility-python"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aigility*"]
+
+[tool.setuptools.package-data]
+aigility = ["py.typed"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+
