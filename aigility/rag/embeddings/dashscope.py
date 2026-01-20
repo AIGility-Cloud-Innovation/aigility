@@ -60,6 +60,18 @@ class DashScopeEmbeddingAdapter:
             return [item['embedding'] for item in resp.output['embeddings']]
         else:
             raise Exception(f"DashScope Embedding Error: {resp.message}")
+        
+    def __call__(self, text: str) -> List[float]:
+        """
+        使适配器对象可调用，用于兼容 Qdrant 等需要直接调用 embedding 对象的场景
+
+        Args:
+            text: 输入文本
+
+        Returns:
+            嵌入向量
+        """
+        return self.embed_query(text)
 
 
 __all__ = ["DashScopeEmbeddingAdapter"]
