@@ -1,7 +1,7 @@
 import uuid
 from typing import List, Dict, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.pydantic_v1 import BaseModel as LangchainBaseModel, Field as LangchainField
+from pydantic import BaseModel as LangchainBaseModel, Field as LangchainField
 
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory

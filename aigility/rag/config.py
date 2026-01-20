@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # 定义支持的类型
-EmbeddingProviderType = Literal["openai", "huggingface", "dashscope"]
+EmbeddingProviderType = Literal["openai", "huggingface", "dashscope", "zhipuai"]
 VectorStoreProviderType = Literal["chroma", "milvus", "faiss"]
 
 
@@ -40,7 +40,7 @@ class EmbeddingConfig(BaseModel):
     嵌入模型配置
     
     Attributes:
-        provider: 模型提供商 ("huggingface" | "dashscope" | "openai")
+        provider: 模型提供商 ("huggingface" | "dashscope" | "openai" | "zhipuai")
         model_name: 模型名称
         api_key: API 密钥（可选，也可通过环境变量设置）
         base_url: API 基础 URL
@@ -49,7 +49,7 @@ class EmbeddingConfig(BaseModel):
     """
     provider: EmbeddingProviderType = Field(
         default="huggingface",
-        description="模型提供商: huggingface(本地) / dashscope / openai"
+        description="模型提供商: huggingface(本地) / dashscope / openai / zhipuai"
     )
     model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5",
