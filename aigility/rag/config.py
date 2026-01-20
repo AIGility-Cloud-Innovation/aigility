@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field, field_validator
 
 # 定义支持的类型
 EmbeddingProviderType = Literal["openai", "huggingface", "dashscope", "zhipuai"]
-VectorStoreProviderType = Literal["chroma", "milvus", "faiss"]
+VectorStoreProviderType = Literal["chroma", "milvus", "faiss", "qdrant"]
 
 
 class EmbeddingConfig(BaseModel):
@@ -76,10 +76,10 @@ class EmbeddingConfig(BaseModel):
         """获取 API Key，优先使用显式传入的，否则从环境变量读取"""
         if self.api_key:
             return self.api_key
-        
         env_key_map = {
             "dashscope": "DASHSCOPE_API_KEY",
             "openai": "OPENAI_API_KEY",
+            "zhipuai": "ZHIPUAI_API_KEY",
         }
         env_var = env_key_map.get(self.provider)
         if env_var:
@@ -104,7 +104,7 @@ class VectorStoreConfig(BaseModel):
     向量库配置
     
     Attributes:
-        provider: 向量库类型 ("chroma" | "milvus" | "faiss")
+        provider: 向量库类型 ("chroma" | "milvus" | "faiss" | "qdrant")
         collection_name: 集合名称
         persist_path: 本地持久化路径（Chroma/FAISS）
         url: 远程服务地址（Milvus）
@@ -113,7 +113,7 @@ class VectorStoreConfig(BaseModel):
     """
     provider: VectorStoreProviderType = Field(
         default="chroma",
-        description="向量库类型: chroma / milvus / faiss"
+        description="向量库类型: chroma / milvus / faiss / qdrant"
     )
     collection_name: str = Field(
         default="rag_collection",
@@ -152,7 +152,13 @@ class VectorStoreConfig(BaseModel):
         """获取服务 URL，如果未设置则使用默认值"""
         if self.url:
             return self.url
-        return "http://localhost:19530"  # Milvus 默认地址
+
+        # 默认 URL
+        default_urls = {
+            "milvus": "http://localhost:19530",
+            "qdrant": "http://localhost:6333",
+        }
+        return default_urls.get(self.provider, "http://localhost:6333")
 
 
 class IngestionConfig(BaseModel):
