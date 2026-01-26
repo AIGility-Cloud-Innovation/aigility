@@ -11,18 +11,28 @@ if TYPE_CHECKING:
     from aigility.rag.config import EmbeddingConfig
 
 
-class ZhipuAiEmbeddingAdapter:
+try:
+    from langchain_core.embeddings import Embeddings
+except ImportError:
+    # 兼容没有安装 langchain_core 的情况（虽然本项目必然安装了）
+    class Embeddings: pass
+
+class ZhipuAiEmbeddingAdapter(Embeddings):
     """Zhipu AI 嵌入模型适配器（实现 LangChain Embeddings 接口）"""
 
-    def __init__(self, config: "EmbeddingConfig"):
+    def __call__(self, text: str) -> List[float]:
+        """兼容某些将 Embeddings 对象当作函数调用的旧代码"""
+        return self.embed_query(text)
+ 
+    def __init__(self, config: "EmbeddingConfig"): 
         # 延迟导入 zhipuai
         try:
             from zai import ZhipuAiClient
             self._ZhipuAI = ZhipuAiClient
         except ImportError:
             raise ImportError(
-                "使用 Zhipu AI 嵌入模型需要安装 zhipuai-sdk: "
-                "pip install zhipuai-sdk"
+                "使用 Zhipu AI 嵌入模型需要安装 zai-sdk: "
+                "pip install zai-sdk"
             )
 
         self.config = config
