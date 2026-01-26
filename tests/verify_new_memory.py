@@ -31,7 +31,6 @@ async def main():
     print("-" * 70)
 
     # 方式1: 使用默认配置（从环境变量读取）
-    config = 
     memory = Memory()
 
     if not memory._provider or not memory._provider.enabled:

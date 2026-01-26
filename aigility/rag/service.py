@@ -143,11 +143,12 @@ class RAGService:
             with open(file_path, "rb") as f:
                 file_hash = hashlib.md5(f.read()).hexdigest()
             
-            # 2. 检查是否已存在
-            existing = self.vector_store.get(where={"file_hash": file_hash}, limit=1)
-            if existing and existing.get("ids"):
-                logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name}")
-                return
+            # 2. 检查是否已存在 (仅在向量库支持 get 方法时执行)
+            if hasattr(self.vector_store, "get"):
+                existing = self.vector_store.get(where={"file_hash": file_hash}, limit=1)
+                if existing and existing.get("ids"):
+                    logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name}")
+                    return
 
             logging.info(f"📄 Processing file: {doc_name}")
 
