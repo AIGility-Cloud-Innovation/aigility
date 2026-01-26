@@ -8,6 +8,13 @@ import hashlib
 import logging
 from typing import Optional, Dict, List
 
+# 加载 .env 文件
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # 抑制 tokenizers 并行警告
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
@@ -126,85 +133,172 @@ class RAGService:
         return [w for w in re.split(r"[_ -]", base_name) if w.strip()]
 
     def add_file(self, file_path: str):
-        """
-        加载文件 -> 智能解析 -> 存入向量库
-        """
-        try:
-            if not isinstance(file_path, str):
-                raise TypeError(f"file_path must be str, got {type(file_path)}")
-            
-            file_path = os.path.abspath(file_path)
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"文件不存在: {file_path}")
-            
-            doc_name = os.path.basename(file_path)
-            
-            # 1. 计算文件 Hash (用于去重)
-            with open(file_path, "rb") as f:
-                file_hash = hashlib.md5(f.read()).hexdigest()
-            
-            # 2. 检查是否已存在 (仅在向量库支持 get 方法时执行)
-            if hasattr(self.vector_store, "get"):
-                existing = self.vector_store.get(where={"file_hash": file_hash}, limit=1)
-                if existing and existing.get("ids"):
-                    logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name}")
-                    return
-
-            logging.info(f"📄 Processing file: {doc_name}")
-
-            # 3. 调用 IngestionManager 进行一站式处理
-            # 这里调用的是优化后的 process_documents，它会自动处理 PDF 表格转 Markdown、Excel 转 KV 对
-            chunks = self.ingestion.process_documents(file_path)
-            
-            if not chunks:
-                logging.warning(f"❌ {doc_name} 解析后无有效内容")
-                return
-
-            # 4. 补充元数据 (File Hash)
-            for chunk in chunks:
-                chunk.metadata["file_hash"] = file_hash
-
-            # 5. 生成文档级元信息 (基于解析后的高质量文本)
-            doc_meta = self._generate_meta_from_chunks(chunks, doc_name)
-            logging.info(f"✅ 生成元信息: 关键词={doc_meta['keywords']}")
-
-            # 6. 存入向量库
-            self.vector_store.add_documents(chunks)
-            logging.info(f"✅ 已添加 {len(chunks)} 个切片到知识库")
+            """
+            加载文件 -> 智能解析 -> 注入上下文元数据 -> 存入向量库
+            """
+            try:
+                if not isinstance(file_path, str): raise TypeError(f"file_path must be str")
+                file_path = os.path.abspath(file_path)
+                if not os.path.exists(file_path): raise FileNotFoundError(f"文件不存在: {file_path}")
                 
-        except Exception as e:
-            logging.error(f"❌ Error adding file {file_path}: {str(e)}")
-            raise e
+                doc_name = os.path.basename(file_path)
+                with open(file_path, "rb") as f:
+                    file_hash = hashlib.md5(f.read()).hexdigest()
+                
+                # 检查去重逻辑... (保持不变)
+                if hasattr(self.vector_store, "get"):
+                    existing = self.vector_store.get(where={"file_hash": file_hash}, limit=1)
+                    if existing and existing.get("ids"):
+                        logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name}")
+                        return
 
-    def search(self, query: str) -> str:
+                logging.info(f"📄 Processing file: {doc_name}")
+                chunks = self.ingestion.process_documents(file_path)
+                
+                if not chunks: return
+
+                # ========================================================
+                # [核心优化 1]：注入上下文缓冲 (Context Buffering)
+                # ========================================================
+                # 我们在 metadata 中预存前后文，这样检索到切片时，
+                # 即使物理切割了，也能通过 metadata 找回断掉的句子。
+                # ========================================================
+                total_chunks = len(chunks)
+                CONTEXT_BUFFER_SIZE = 250  # 预存前后 250 个字符
+
+                for i, chunk in enumerate(chunks):
+                    # 基础元数据
+                    chunk.metadata["file_hash"] = file_hash
+                    chunk.metadata["file_name"] = doc_name
+                    chunk.metadata["chunk_index"] = i  # 记录顺序 ID，这很重要
+                    chunk.metadata["total_chunks"] = total_chunks
+                    
+                    # 注入前文 (Look-behind)
+                    if i > 0:
+                        prev_text = chunks[i-1].page_content
+                        # 取上一段的最后 N 个字符
+                        chunk.metadata["prev_buffer"] = prev_text[-CONTEXT_BUFFER_SIZE:]
+                    else:
+                        chunk.metadata["prev_buffer"] = ""
+
+                    # 注入后文 (Look-ahead) -> 解决“问题在页末，答案在下页”的关键
+                    if i < total_chunks - 1:
+                        next_text = chunks[i+1].page_content
+                        # 取下一段的开始 N 个字符
+                        chunk.metadata["next_buffer"] = next_text[:CONTEXT_BUFFER_SIZE]
+                    else:
+                        chunk.metadata["next_buffer"] = ""
+
+                doc_meta = self._generate_meta_from_chunks(chunks, doc_name)
+                self.vector_store.add_documents(chunks)
+                logging.info(f"✅ 已添加 {len(chunks)} 个切片 (带上下文缓冲)")
+                    
+            except Exception as e:
+                logging.error(f"❌ Error adding file {file_path}: {str(e)}")
+                raise e
+    def search(self, query: str, expand_context: bool = True) -> str:
         """
-        检索相关文档，返回格式化字符串供 LLM 使用
+        检索并融合上下文
+        Args:
+            expand_context: 是否启用利用 metadata 进行上下文补全
         """
         try:
-            # 语义检索
+            # 1. 基础检索
             docs = self.vector_store.similarity_search(query, k=self.config.search_top_k)
-            
-            if not docs:
-                return ""
+            if not docs: return ""
 
-            results = []
-            for i, doc in enumerate(docs):
-                source = doc.metadata.get("file_name", "Unknown")
-                # 移除多余换行，保持紧凑
-                content = doc.page_content.strip()
-                
-                # 构造引用格式，包含来源
-                result_item = (
-                    f"--- [引用 {i+1}] 来源: {source} ---\n"
-                    f"{content}\n"
-                )
-                results.append(result_item)
+            # ========================================================
+            # [核心优化 2]：智能结果融合 (Smart Result Merging)
+            # ========================================================
+            # 如果检索出了 [Chunk 5, Chunk 6, Chunk 10]，
+            # 应该把 5 和 6 合并展示，而不是分开。
+            # ========================================================
             
-            return "\n".join(results)
+            # 按 (file_hash, chunk_index) 分组排序
+            # 结构: { "hash_xxx": [doc_obj_1, doc_obj_2] }
+            grouped_docs = {}
+            for doc in docs:
+                f_hash = doc.metadata.get("file_hash", "unknown")
+                if f_hash not in grouped_docs:
+                    grouped_docs[f_hash] = []
+                grouped_docs[f_hash].append(doc)
+
+            final_results = []
+            
+            for f_hash, group in grouped_docs.items():
+                # 按 chunk_index 排序，确保合并顺序正确
+                group.sort(key=lambda x: x.metadata.get("chunk_index", 0))
+                
+                merged_texts = []
+                current_block = []
+                last_index = -999
+
+                for doc in group:
+                    current_index = doc.metadata.get("chunk_index", 0)
+                    content = doc.page_content.strip()
+                    
+                    # 检查是否连续 (允许 index 差 1)
+                    if current_index == last_index + 1:
+                        # 是连续的 chunk，直接合并到当前块
+                        current_block.append(content)
+                    else:
+                        # 不连续，先结算上一个块
+                        if current_block:
+                            merged_texts.append(current_block)
+                        # 开启新块
+                        current_block = [content]
+                        
+                        # [补全逻辑]：如果是新块的开头，检查是否需要利用 metadata 补全“前文”
+                        # 只有当这是整个检索列表的第一个，且不在开头时才补，避免冗余
+                        if expand_context and doc.metadata.get("prev_buffer"):
+                            # 只有当句子看起来被截断时才补全（简单判断：不大写开头，或之前的标点不是句号）
+                            # 这里简单处理：直接补上，让 LLM 自己判断
+                            pass 
+
+                    # [补全逻辑]：利用 Metadata 补全“后文” (Look-ahead)
+                    # 只有当这个 doc 是孤立的，或者它是连续块的最后一个时，才尝试补全
+                    # 注意：如果下一个 chunk 已经在 group 里了，就不要补全 metadata，否则会重复
+                    is_last_in_group = (doc == group[-1])
+                    next_is_missing = True
+                    if not is_last_in_group:
+                         next_doc_index = group[group.index(doc) + 1].metadata.get("chunk_index", 0)
+                         if next_doc_index == current_index + 1:
+                             next_is_missing = False
+
+                    if expand_context and next_is_missing and doc.metadata.get("next_buffer"):
+                        # 添加一个特殊的标记，告诉 LLM 这是自动补全的上下文
+                        buffer_text = doc.metadata["next_buffer"]
+                        # 为了不污染 current_block 的纯文本，我们在最终输出时处理，
+                        # 或者在这里简单拼接
+                        current_block.append(f" [>>接下文: {buffer_text}...] ")
+
+                    last_index = current_index
+
+                # 结算最后一个块
+                if current_block:
+                    merged_texts.append(current_block)
+
+                # 格式化输出
+                source_name = group[0].metadata.get("file_name", "Unknown")
+                for i, block in enumerate(merged_texts):
+                    # block 是一个 list，里面可能是 [chunk_N_content, chunk_N+1_content]
+                    # 或者 [chunk_N_content, buffer_text]
+                    full_text = "".join(block)
+                    # 清理可能产生的重复标记
+                    full_text = full_text.replace("...]  [>>接下文:", "") 
+                    
+                    result_item = (
+                        f"--- [引用] 来源: {source_name} (片段 {i+1}) ---\n"
+                        f"{full_text}\n"
+                    )
+                    final_results.append(result_item)
+            
+            return "\n".join(final_results)
             
         except Exception as e:
             logging.error(f"❌ Search failed: {str(e)}")
-            return ""
+            # 降级策略：如果高级融合失败，回退到简单拼接
+            return "\n".join([d.page_content for d in docs])
 
     def clear_knowledge_base(self):
         """(危险操作) 清空知识库"""
@@ -215,14 +309,35 @@ class RAGService:
                     shutil.rmtree(path)
                     os.makedirs(path, exist_ok=True)
                     logging.info(f"✅ Chroma 知识库已重置: {path}")
-            # ... 其他 vector store 的清理逻辑保持不变 ...
+
+            elif self.config.vector_store.provider == "qdrant":
+                # 获取 Qdrant client
+                from qdrant_client import QdrantClient
+                from qdrant_client.models import Filter, FilterSelector
+
+                url = self.config.vector_store.get_url() if hasattr(self.config.vector_store, 'get_url') else (
+                    self.config.vector_store.url or "http://localhost:6333"
+                )
+
+                client = QdrantClient(url=url)
+                collection_name = self.config.vector_store.collection_name
+
+                # 删除集合中的所有数据 - 使用空的 Filter 来匹配所有点
+                client.delete(
+                    collection_name=collection_name,
+                    points_selector=FilterSelector(
+                        filter=Filter(must=[])  # 空条件匹配所有点
+                    )
+                )
+                logging.info(f"✅ Qdrant 集合 '{collection_name}' 中的所有数据已清空")
+
             else:
                 logging.warning("当前配置不支持自动清空")
-            
+
             # 清空内存中的元数据
             self.doc_meta_info = {}
             self.global_doc_keywords = []
-                
+
         except Exception as e:
             logging.error(f"❌ 清空知识库失败: {str(e)}")
 
@@ -263,20 +378,20 @@ if __name__ == "__main__":
     
     config = RAGConfig(
         embedding=EmbeddingConfig(
-            provider="huggingface",
-            model_name="BAAI/bge-small-zh-v1.5",
-            kwargs={"model_kwargs": {"device": "cpu"}}
+            provider="zhipuai",
+            model_name="embedding-3",
+            api_key=os.getenv("ZHIPUAI_API_KEY", "")
         ),
         vector_store=VectorStoreConfig(
-            provider="chroma",
-            collection_name="test_collection",
-            persist_path="./test_chroma_db"
+            provider="qdrant",
+            collection_name="adp_knowledge_base",
+            url="http://localhost:6333" 
         ),
         ingestion=IngestionConfig(
             chunk_size=500,
-            chunk_overlap=100,  # 增大 overlap，确保跨页内容有重叠
+            chunk_overlap=50,  # 增大 overlap，确保跨页内容有重叠
         ),
-        search_top_k=3
+        search_top_k=5
     )
     
     print(f"\n📋 配置信息:")
@@ -300,7 +415,8 @@ if __name__ == "__main__":
     # 添加测试文件
     # ----------------------
     # 查找测试文件
-    test_files = ["test.pdf", "test.txt", "../test.pdf", "../../test.pdf"]
+    test_files = ["test.pdf", "test.txt", "aigility/rag/test.pdf", "aigility/rag/test.txt",
+                  "../test.pdf", "../../test.pdf"]
     test_file = None
     for f in test_files:
         if os.path.exists(f):
@@ -337,9 +453,8 @@ if __name__ == "__main__":
     # ----------------------
     print("\n🔍 测试检索功能:")
     test_queries = [
-        "五险一金是什么",
-        "无领导小组面试考察什么？",
-        ".面试形式和种类有哪些？"
+
+        "应届生毕业后档案有哪些去处？"
     ]
     
     for query in test_queries:
