@@ -33,6 +33,7 @@ from .config import (
     IngestionConfig,
 )
 from .workflow import create_rag_workflow, RAGWorkflowState
+from .client import TimeMRAGClient, create_timem_rag_client
 
 __all__ = [
     # 基础服务
@@ -44,4 +45,7 @@ __all__ = [
     # 工作流
     "create_rag_workflow",
     "RAGWorkflowState",
+    # 云服务客户端
+    "TimeMRAGClient",
+    "create_timem_rag_client",
 ]

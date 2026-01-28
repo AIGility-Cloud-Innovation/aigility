@@ -10,7 +10,7 @@ from .memory import Memory
 from .chat import ChatAgent
 from .chatflow import ChatFlow
 from .workflow import WorkflowEngine
-
+from .adp import ADPClient
 
 class ADKClient:
     """
@@ -82,7 +82,7 @@ class ADKClient:
             api_key: API Key
             **kwargs: 其他配置
         """
-        from .adp import ADPClient
+        
         return ADPClient(base_url=base_url, api_key=api_key, **kwargs)
 
     async def close(self):
