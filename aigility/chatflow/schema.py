@@ -45,17 +45,17 @@ class ChatFlowState(TypedDict):
 
 # --- 3. 核心工具定义（模拟） ---
 # 实际应用中，这些会是真实的 RAG 和 Web Search 函数
-class RAGTool(BaseModel):
-    """Tool for retrieving information from internal knowledge base (RAG)."""
-    query: str = Field(description="The query to search the internal knowledge base.")
+class TimeMRAGTool(BaseModel):
+    """Tool for searching the TimeM cloud RAG service for information from uploaded documents."""
+    query: str = Field(description="The search query to find relevant information in the TimeM knowledge base.")
 
 class WebSearchTool(BaseModel):
     """Tool for searching the web for up-to-date information."""
     query: str = Field(description="The query to search the internet.")
 
-AVAILABLE_TOOLS = [RAGTool, WebSearchTool]
+AVAILABLE_TOOLS = [TimeMRAGTool, WebSearchTool]
 TOOL_MAP = {
-    "rag_search": RAGTool,
+    "timem_rag_search": TimeMRAGTool,
     "web_search": WebSearchTool,
 }
 
@@ -72,5 +72,7 @@ def get_tool_descriptions():
     """Returns a list of tool descriptions for the LLM."""
     descriptions = []
     for tool in AVAILABLE_TOOLS:
-        descriptions.append(f"Tool Name: {tool.__name__}\nDescription: {tool.__doc__}\nSchema: {tool.schema_json(indent=2)}")
-    return "\n\n".join(descriptions)
+        # 简化工具描述，只包含名称和简短说明
+        tool_desc = f"- {tool.__name__}: {tool.__doc__}"
+        descriptions.append(tool_desc)
+    return "\n".join(descriptions)
