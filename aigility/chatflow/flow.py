@@ -6,18 +6,17 @@ from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AnyMessage, AIMessageChunk
-from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
-
+from langchain_core.output_parsers import StrOutputParser
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
+from ..rag import create_timem_rag_client
 from .schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, get_tool_names, get_tool_schema_map
 
 # --- 1. 辅助函数：加载配置 ---
 def load_default_config() -> Dict[str, Any]:
     """Load the chat flow configuration from the YAML file."""
-    config_path = os.path.join(os.path.dirname(__file__), "prompts", "chat_flow_config.yaml")
+    config_path = os.path.join(os.path.dirname(__file__), "prompts", "assistant.yaml")
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
@@ -44,6 +43,15 @@ class ChatFlow:
         self.adk_config = adk_config or ADKConfig()
         self.llm = ModelFactory.create_llm(self.adk_config)
         self.tools = get_tool_schema_map()
+
+        # 初始化太忆 RAG 客户端（如果配置了）
+        self.timem_rag_client = None
+        if self.adk_config.timem_enabled and self.adk_config.timem_api_key and self.adk_config.timem_base_url:
+            self.timem_rag_client = create_timem_rag_client(
+                base_url=self.adk_config.timem_base_url,
+                api_key=self.adk_config.timem_api_key,
+            )
+
         self.graph = self._build_graph(checkpoint)
 
     def _build_graph(self, checkpoint: Optional[BaseCheckpointSaver]):
@@ -89,10 +97,139 @@ class ChatFlow:
         使用 LLM 和 CoT Prompt 决定是否调用工具。
         """
         print("--- [ADK] Executing Agent Decision Node ---")
-        
-        # Per user request, disable tool calling for now.
-        # This will be changed back in the future.
-        return {"thought": "Tool calling is disabled.", "tool_calls": []}
+
+        # 如果太忆 RAG 未启用，跳过工具调用
+        if not self.timem_rag_client:
+            print("--- [ADK] TimeM RAG client not configured, skipping tool calling ---")
+            return {"thought": "太忆 RAG 服务未配置，直接生成回复。", "tool_calls": []}
+
+        # 获取历史消息和用户输入
+        history = "\n".join([f"{m.type.capitalize()}: {m.content}" for m in state["messages"][:-1]])
+        user_input = state["messages"][-1].content
+
+        # 构建决策 prompt
+        agent_decision_prompt = self.config.get("agent_decision_prompt", "")
+        tool_descriptions = get_tool_descriptions()
+
+        # 添加 JSON 格式说明到 prompt 中（注意：花括号需要转义为双花括号）
+        json_format_instruction = """
+**重要输出格式要求：**
+你必须严格按照以下 JSON 格式输出，不要添加任何其他文本、标记或说明：
+
+```json
+{{
+  "thought": "你的思考过程描述（必须填写）",
+  "tool_calls": [
+    {{
+      "tool_name": "TimeMRAGTool",
+      "query": "搜索查询语句"
+    }}
+  ]
+}}
+```
+
+如果不需要调用工具，tool_calls 必须是空数组：[]
+只输出 JSON 对象，不要输出其他任何内容！
+"""
+        enhanced_prompt = agent_decision_prompt + "\n\n" + json_format_instruction
+
+        prompt = ChatPromptTemplate.from_template(enhanced_prompt)
+
+        # 直接使用手动解析 JSON（兼容性更好，适用于所有 LLM）
+        chain = prompt | self.llm
+
+        try:
+            response = chain.invoke({
+                "history": history,
+                "input": user_input,
+                "tool_descriptions": tool_descriptions
+            })
+
+            # 获取原始输出
+            if hasattr(response, 'content'):
+                raw_output = response.content
+            else:
+                raw_output = str(response)
+
+            if self.adk_config.debug:
+                print(f"--- [ADK] DEBUG: Raw LLM output (first 500 chars): {raw_output[:500]} ---")
+
+            # 尝试从输出中提取 JSON
+            import re
+            json_pattern = r'```json\s*(.*?)\s*```'
+            json_match = re.search(json_pattern, raw_output, re.DOTALL)
+
+            if json_match:
+                json_str = json_match.group(1)
+                if self.adk_config.debug:
+                    print(f"--- [ADK] DEBUG: Extracted JSON from code block ---")
+            else:
+                # 尝试直接找到 JSON 对象
+                json_pattern2 = r'\{.*\}'
+                json_match2 = re.search(json_pattern2, raw_output, re.DOTALL)
+                if json_match2:
+                    json_str = json_match2.group(0)
+                    if self.adk_config.debug:
+                        print(f"--- [ADK] DEBUG: Extracted JSON directly ---")
+                else:
+                    # 尝试查找数组格式
+                    json_pattern3 = r'\[.*\]'
+                    json_match3 = re.search(json_pattern3, raw_output, re.DOTALL)
+                    if json_match3:
+                        json_str = json_match3.group(0)
+                        if self.adk_config.debug:
+                            print(f"--- [ADK] DEBUG: Extracted JSON array ---")
+                    else:
+                        raise ValueError("无法从 LLM 输出中提取 JSON")
+
+            # 解析 JSON
+            parsed = json.loads(json_str)
+
+            # 处理不同的返回格式
+            thought = "思考过程未生成"
+            tool_calls = []
+
+            if isinstance(parsed, list):
+                # 格式: [{'tool_name': 'TimeMRAGTool', 'query': '...'}]
+                for tc in parsed:
+                    if isinstance(tc, dict) and 'tool_name' in tc and 'query' in tc:
+                        tool_calls.append(ToolCall(
+                            tool_name=tc['tool_name'],
+                            query=tc['query']
+                        ))
+                thought = f"决定调用工具: {', '.join([tc.tool_name for tc in tool_calls])}"
+
+            elif isinstance(parsed, dict):
+                if 'tool_calls' in parsed:
+                    # 标准格式: {"thought": "...", "tool_calls": [...]}
+                    thought = parsed.get('thought', '思考过程未生成')
+                    for tc in parsed.get('tool_calls', []):
+                        tool_calls.append(ToolCall(
+                            tool_name=tc['tool_name'],
+                            query=tc['query']
+                        ))
+                elif 'tool_name' in parsed and 'query' in parsed:
+                    # 单个工具: {'tool_name': 'TimeMRAGTool', 'query': '...'}
+                    tool_calls.append(ToolCall(
+                        tool_name=parsed['tool_name'],
+                        query=parsed['query']
+                    ))
+                    thought = f"决定调用工具: {parsed['tool_name']}"
+
+            if self.adk_config.debug:
+                print(f"--- [ADK] Agent Decision: thought={thought}, tool_calls={len(tool_calls)} ---")
+
+            return {
+                "thought": thought,
+                "tool_calls": tool_calls
+            }
+
+        except Exception as e:
+            import traceback
+            print(f"--- [ADK] Agent decision failed: {e} ---")
+            if self.adk_config.debug:
+                print(f"--- [ADK] Traceback: {traceback.format_exc()} ---")
+            return {"thought": f"决策过程出错: {str(e)}", "tool_calls": []}
 
     def _should_continue(self, state: ChatFlowState) -> str:
         """
@@ -115,17 +252,22 @@ class ChatFlow:
         for tc in tool_calls:
             tool_name = tc.tool_name
             query = tc.query
-            
-            # 实际应用中，这里会调用真实的 RAG 或 Web Search API
-            if tool_name == "RAGTool":
-                result = f"RAG Search Result for '{query}': 找到关于 {query} 的内部知识库片段。"
+
+            # 根据工具名称执行不同的操作
+            if tool_name == "TimeMRAGTool":
+                # 使用太忆 RAG 云服务
+                if self.timem_rag_client:
+                    result = self.timem_rag_client.search_sync(query)
+                    print(f"✅成功调用太忆RAG服务：--- [ADK] TimeM RAG search for '{query}': {result} ---")
+                else:
+                    result = f"❌错误：太忆 RAG 服务未配置。现在的配置：url：{self.adk_config.timem_base_url},apikey：{self.adk_config.timem_api_key}"
             elif tool_name == "WebSearchTool":
                 result = f"Web Search Result for '{query}': 找到关于 {query} 的最新互联网信息。"
             else:
                 result = f"Error: Tool '{tool_name}' not found."
-            
+
             tool_results.append(ToolResult(tool_name=tool_name, result=result))
-            
+
             # 将工具结果添加到消息历史中，以便 LLM 在下一步使用
             state["messages"].append(ToolMessage(content=result, tool_call_id=tool_name))
 

@@ -135,3 +135,83 @@ class ChatService:
         except Exception as e:
             print(f"Suggestion generation failed: {e}")
             return ["请重试", "报告错误"]
+# -------------------- 
+# 对聊天服务的测试
+# --------------------
+if __name__ == "__main__":
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()  # 加载 .env 文件
+    from aigility.core.config import ADKConfig
+    from aigility.chat.service import ChatService
+    from aigility.chat.schema import ChatRequest
+
+    # 初始化配置（从环境变量读取 DeepSeek 配置）
+    config = ADKConfig(
+        llm_provider="deepseek",  # 使用 DeepSeek
+        llm_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
+        llm_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        timem_enabled=True,  # 启用太忆 RAG
+        timem_api_key=os.getenv("TIMEM_API_KEY"),
+        timem_base_url=os.getenv("TIMEM_BASE_URL")
+    )
+
+    # 创建聊天服务
+    chat_service = ChatService(adk_config=config)
+
+    # 构建聊天请求
+    chat_request = ChatRequest(
+        user_input="应届生毕业后档案有哪些去处？",
+        session_id=None
+    )
+
+    # 处理聊天请求
+    chat_response = chat_service.process_chat(chat_request)
+
+    # 输出响应
+    print("=" * 80)
+    print("AI 回复:", chat_response.response)
+    print("会话 ID:", chat_response.session_id)
+    print("会话标题:", chat_response.session_title)
+    print("回复建议:", chat_response.reply_suggestions)
+    print("=" * 80)
+
+    # 检查是否使用了 RAG
+    print("\n【RAG 使用情况】")
+    if chat_response.tool_results:
+        print(f"✓ 使用了工具调用，共 {len(chat_response.tool_results)} 个工具被调用")
+
+        # 检查是否有 RAG 相关的工具调用
+        rag_used = False
+        for i, tool_result in enumerate(chat_response.tool_results, 1):
+            tool_name = tool_result.get("tool_name", "unknown")
+            print(f"\n工具 {i}: {tool_name}")
+
+            # 检查是否是 RAG 相关工具
+            if "rag" in tool_name.lower() or "retriev" in tool_name.lower() or "search" in tool_name.lower():
+                rag_used = True
+                print("  → 这是一个 RAG 相关工具")
+
+            # 打印工具结果（如果内容不太长）
+            result = tool_result.get("result", "")
+            if result:
+                result_str = str(result)
+                if len(result_str) > 500:
+                    print(f"  结果预览: {result_str[:500]}...")
+                else:
+                    print(f"  结果: {result_str}")
+
+        if rag_used:
+            print("\n✓ 确认：本次对话使用了 RAG 检索增强功能")
+        else:
+            print("\n✗ 未检测到 RAG 工具调用")
+    else:
+        print("✗ 未使用任何工具调用（纯对话模式）")
+
+    # 打印思考过程（如果有）
+    if chat_response.thought_process:
+        print("\n【思考过程】")
+        print(chat_response.thought_process)
+
+    print("=" * 80)

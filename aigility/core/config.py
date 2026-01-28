@@ -28,7 +28,12 @@ class ADKConfig:
     # Knowledge 配置
     knowledge_enabled: bool = True
     knowledge_store_type: str = "vector"  # vector, graph, hybrid
-    
+
+    # 太忆 (TimeM) RAG 云服务配置
+    timem_api_key: Optional[str] = None  # 太忆API Key
+    timem_base_url: Optional[str] = None  # 太忆API基础URL
+    timem_enabled: bool = False  # 是否启用太忆RAG服务
+
     # 工作流配置
     workflow_timeout: float = 300.0
     workflow_max_steps: int = 50
