@@ -152,7 +152,7 @@ if __name__ == "__main__":
         llm_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
         llm_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        timem_enabled=True,  # 启用太忆 RAG
+        timem_enabled=os.getenv("TIMEM_ENABLED", "false").lower() == "true",  # 启用太忆 RAG
         timem_api_key=os.getenv("TIMEM_API_KEY"),
         timem_base_url=os.getenv("TIMEM_BASE_URL")
     )
