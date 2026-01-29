@@ -25,7 +25,7 @@ class ADPClient:
         user_input: str, 
         agent: str, 
         session_id: Optional[str] = None,
-        user_id: str = "default_user"
+        user_id: str = "usr_dbfb5e94d53a"
     ) -> Dict[str, Any]:
         """
         调用远程 Agent 进行对话
@@ -53,7 +53,7 @@ class ADPClient:
         user_input: str, 
         agent: str, 
         session_id: Optional[str] = None,
-        user_id: str = "default_user"
+        user_id: str = "usr_dbfb5e94d53a"
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         调用远程 Agent 进行流式对话
@@ -98,6 +98,7 @@ class ADPClient:
     async def search_documents(
         self, 
         query: str, 
+        user_id: str = 'usr_dbfb5e94d53a',
         topic: Optional[str] = None, 
         k: int = 5,
         filter_threshold: float = 0.3
@@ -116,6 +117,7 @@ class ADPClient:
         """
         payload = {
             "query": query,
+            "user_id": user_id,
             "topic": topic,
             "k": k,
             "filter_threshold": filter_threshold
