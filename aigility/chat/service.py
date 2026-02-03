@@ -2,7 +2,7 @@ import uuid
 from typing import List, Dict, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel as LangchainBaseModel, Field as LangchainField
-
+from langchain_core.runnables import RunnableConfig
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
 from ..chatflow.flow import ChatFlow
@@ -31,7 +31,12 @@ class ChatService:
             包含 AI 回复、建议和流程信息的响应对象。
         """
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
-        
+        timem_kb_id = request.kb_id if request.kb_id else "kb_default"
+        config = RunnableConfig(
+        configurable={
+            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
+        }
+    )
         # 模拟历史记录的获取（当前版本简化为只处理当前请求）
         # 在实际应用中，这里会从数据库或缓存中加载历史消息
         history = [] 
@@ -39,7 +44,8 @@ class ChatService:
         # 调用 ChatFlow
         flow_result = self.chat_flow.invoke(
             user_input=request.user_input,
-            history=history
+            history=history,
+            config=config
         )
         
         # 解析回复建议
@@ -83,10 +89,16 @@ class ChatService:
         """
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
         history = []
-        
+        timem_kb_id = request.kb_id if request.kb_id else "kb_default"
+        config = RunnableConfig(
+        configurable={
+            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
+        }
+    )
         async for event in self.chat_flow.astream(
             user_input=request.user_input,
-            history=history
+            history=history,
+            config=config
         ):
             yield event
 
@@ -152,7 +164,7 @@ if __name__ == "__main__":
         llm_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
         llm_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        timem_enabled=os.getenv("TIMEM_ENABLED", "false").lower() == "true",  # 启用太忆 RAG
+        timem_enabled=os.getenv("TIMEM_ENABLED", "false").lower() == "true",  # 关闭太忆 RAG
         timem_api_key=os.getenv("TIMEM_API_KEY"),
         timem_base_url=os.getenv("TIMEM_BASE_URL")
     )
@@ -162,7 +174,7 @@ if __name__ == "__main__":
 
     # 构建聊天请求
     chat_request = ChatRequest(
-        user_input="应届生毕业后档案有哪些去处？",
+        user_input="Mac主要包含哪六大产品系列？",
         session_id=None
     )
 

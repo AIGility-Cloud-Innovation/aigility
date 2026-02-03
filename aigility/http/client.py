@@ -55,8 +55,19 @@ class HTTPClient:
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
+        files: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """发送 HTTP 请求"""
+        """
+        发送 HTTP 请求
+
+        Args:
+            method: HTTP 方法
+            endpoint: 端点路径
+            data: 请求体数据 (JSON)
+            params: URL 查询参数
+            headers: 额外的请求头
+            files: 文件上传数据
+        """
         # 使用熔断器和重试机制
         async with self.circuit_breaker():
             return await self.retry_handler.execute(
@@ -66,6 +77,7 @@ class HTTPClient:
                 data=data,
                 params=params,
                 headers=headers,
+                files=files,
             )
     
     async def stream_request(
@@ -133,12 +145,23 @@ class HTTPClient:
         data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
+        files: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """执行实际请求"""
+        """
+        执行实际请求
+
+        Args:
+            method: HTTP 方法
+            endpoint: 端点路径
+            data: 请求体数据 (JSON)
+            params: URL 查询参数
+            headers: 额外的请求头
+            files: 文件上传数据
+        """
         # 使用连接池
         async with self.connection_pool.get_client() as client:
             # 合并客户端级别和请求级别的 headers
-            request_headers = {"Content-Type": "application/json"}
+            request_headers = {}
             request_headers.update(self.headers)
             if headers:
                 request_headers.update(headers)
@@ -146,16 +169,32 @@ class HTTPClient:
             # 如果 self.api_key 存在，且 X-API-Key 头未被显式设置，则添加 X-API-Key 头
             if self.api_key and "X-API-Key" not in request_headers:
                 request_headers["X-API-Key"] = self.api_key
-            
-            response = await client.request(
-                method=method,
-                url=endpoint,
-                json=data,
-                params=params,
-                headers=request_headers,
-                timeout=self.timeout,
-            )
-            
+
+            # 只有在没有文件上传时才设置 Content-Type 为 application/json
+            # httpx 会自动为文件上传设置正确的 Content-Type 和 boundary
+            if not files and "Content-Type" not in request_headers:
+                request_headers["Content-Type"] = "application/json"
+
+            # 准备请求参数
+            request_kwargs = {
+                "method": method,
+                "url": endpoint,
+                "params": params,
+                "headers": request_headers,
+                "timeout": self.timeout,
+            }
+
+            # 根据是否有文件上传选择不同的数据传递方式
+            if files:
+                # 文件上传：使用 data 和 files
+                request_kwargs["data"] = data
+                request_kwargs["files"] = files
+            else:
+                # 普通 JSON 请求：使用 json
+                request_kwargs["json"] = data
+
+            response = await client.request(**request_kwargs)
+
             response.raise_for_status()
             return response.json()
     

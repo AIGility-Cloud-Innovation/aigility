@@ -5,6 +5,7 @@ class ChatRequest(BaseModel):
     """用户发送的聊天请求模型"""
     user_input: str = Field(..., description="用户输入的文本内容")
     session_id: Optional[str] = Field(None, description="会话ID，用于恢复历史记录")
+    kb_id: Optional[str] = Field(None, description="知识库ID，用于指定RAG检索的知识库")
     
 class ChatResponse(BaseModel):
     """聊天回复模型"""

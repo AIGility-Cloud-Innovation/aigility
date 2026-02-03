@@ -64,14 +64,14 @@ class TimeMRAGClient:
     async def search(
         self,
         query: str,
-        top_k: int = 5
+        kb_id: str
     ) -> str:
         """
         搜索知识库
 
         Args:
             query: 搜索查询文本
-            top_k: 返回结果数量（默认5）
+            kb_id: 知识库ID（必填）
 
         Returns:
             格式化的搜索结果字符串
@@ -80,26 +80,47 @@ class TimeMRAGClient:
             Exception: 搜索失败时抛出异常
         """
         try:
+            payload = {
+                "kb_id": kb_id,
+                "query": query,
+
+            }
+
             response = await self.http_client.request(
                 method="POST",
-                endpoint="/rag/sdk/search",
-                data={"query": query}
+                endpoint="/api/v1/knowledge/search",
+                data=payload
             )
 
-            # 解析响应
+            # 解析响应（根据服务端 SearchResponse 格式）
             if response.get("status") == "success":
-                results = response.get("data", [])
-                if not results:
+                results = response.get("results", [])
+                total_results = response.get("total_results", 0)
+
+                if total_results == 0 or not results:
                     return f"未找到关于 '{query}' 的相关信息。"
 
                 # 格式化搜索结果
                 formatted_results = []
                 for idx, result in enumerate(results, 1):
-                    doc = result.get("document", "")
+                    text = result.get("text", "")
                     score = result.get("score", 0.0)
-                    formatted_results.append(
-                        f"[结果 {idx}] (相关度: {score:.2f})\n{doc}"
-                    )
+                    chunk_id = result.get("chunk_id", "")
+                    metadata = result.get("metadata", {})
+
+                    # 构建结果条目
+                    result_entry = f"[结果 {idx}] (相关度: {score:.2f})"
+                    if chunk_id:
+                        result_entry += f" [ID: {chunk_id[:8]}...]"
+                    result_entry += f"\n{text}"
+
+                    # 如果有元数据，添加到结果中
+                    if metadata:
+                        source = metadata.get("source", "")
+                        if source:
+                            result_entry += f"\n  来源: {source}"
+
+                    formatted_results.append(result_entry)
 
                 return "\n\n".join(formatted_results)
             else:
@@ -111,14 +132,14 @@ class TimeMRAGClient:
     def search_sync(
         self,
         query: str,
-        top_k: int = 5
+        kb_id: str
     ) -> str:
         """
         同步搜索知识库
 
         Args:
             query: 搜索查询文本
-            top_k: 返回结果数量（默认5）
+            kb_id: 知识库ID（必填）
 
         Returns:
             格式化的搜索结果字符串
@@ -131,7 +152,9 @@ class TimeMRAGClient:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                return loop.run_until_complete(self.search(query, top_k))
+                return loop.run_until_complete(
+                    self.search(query, kb_id)
+                )
             finally:
                 loop.close()
 
@@ -147,7 +170,9 @@ class TimeMRAGClient:
                         return future.result(timeout=self.timeout + 5)
                 else:
                     # 没有运行中的事件循环，直接使用 asyncio.run
-                    return asyncio.run(self.search(query, top_k))
+                    return asyncio.run(
+                        self.search(query, kb_id)
+                    )
             except RuntimeError:
                 # 无法获取事件循环，创建新的
                 return run_in_new_loop()
@@ -184,7 +209,7 @@ class TimeMRAGClient:
         try:
             response = await self.http_client.request(
                 method="GET",
-                endpoint="/rag/sdk/stats"
+                endpoint="/api/v1/knowledge/stats"
             )
             return response
         except Exception as e:
@@ -200,7 +225,7 @@ class TimeMRAGClient:
         try:
             response = await self.http_client.request(
                 method="DELETE",
-                endpoint="/rag/sdk/clear"
+                endpoint="/api/v1/knowledge/clear"
             )
             return response
         except Exception as e:
@@ -216,7 +241,7 @@ class TimeMRAGClient:
         try:
             response = await self.http_client.request(
                 method="GET",
-                endpoint="/rag/sdk/health"
+                endpoint="/api/v1/knowledge/health"
             )
             return response.get("status") == "healthy"
         except Exception:
