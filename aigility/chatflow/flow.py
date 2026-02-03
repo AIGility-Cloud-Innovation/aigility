@@ -8,6 +8,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AnyMessage, AIMessageChunk
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableConfig
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
 from ..rag import create_timem_rag_client
@@ -239,7 +240,7 @@ class ChatFlow:
             return "continue"
         return "end"
 
-    def _tool_executor(self, state: ChatFlowState) -> Dict[str, Any]:
+    def _tool_executor(self, state: ChatFlowState,config: RunnableConfig) -> Dict[str, Any]:
         """
         Node 2: 工具执行节点。
         模拟执行 RAG 和 Web Search 工具。
@@ -247,8 +248,9 @@ class ChatFlow:
         # print("--- Executing Tool Executor Node ---")
         tool_calls: List[ToolCall] = state["tool_calls"]
         tool_results: List[ToolResult] = []
+        target_kb_id = config.get("configurable", {}).get("timem_kb_id")
+        print(f"--- 🔧 [ADK] Tool Executor: Received {len(tool_calls)} tool calls, using kb_id={target_kb_id} ---")
 
-        # 模拟工具执行
         for tc in tool_calls:
             tool_name = tc.tool_name
             query = tc.query
@@ -257,7 +259,7 @@ class ChatFlow:
             if tool_name == "TimeMRAGTool":
                 # 使用太忆 RAG 云服务
                 if self.timem_rag_client:
-                    result = self.timem_rag_client.search_sync(query)
+                    result = self.timem_rag_client.search_sync(query=query, kb_id=target_kb_id)
                     print(f"✅成功调用太忆RAG服务：--- [ADK] TimeM RAG search for '{query}': {result} ---")
                 else:
                     result = f"❌错误：太忆 RAG 服务未配置。现在的配置：url：{self.adk_config.timem_base_url},apikey：{self.adk_config.timem_api_key}"
@@ -333,16 +335,24 @@ class ChatFlow:
             print(f"Response generation failed: {e}")
             return {"messages": [AIMessage(content=f"抱歉，生成回复时发生错误: {e}")]}
 
-    def invoke(self, user_input: str, history: List[AnyMessage] = None) -> Dict[str, Any]:
+    def invoke(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None) -> Dict[str, Any]:
         """
         调用 ChatFlow，执行一次完整的对话流程。
+
+        Args:
+            user_input: 用户输入
+            history: 对话历史
+            config: 可选的配置对象，包含运行时配置（如timem_kb_id）
+
+        Returns:
+            包含响应、思考过程、工具结果的字典
         """
         if history is None:
             history = []
-            
+
         # 添加最新的用户消息
         history.append(HumanMessage(content=user_input))
-        
+
         initial_state = ChatFlowState(
             messages=history,
             thought=None,
@@ -351,13 +361,16 @@ class ChatFlow:
             reply_suggestion=None,
             session_title_suggestion=None
         )
-        
-        # 运行 Graph
-        final_state = self.graph.invoke(initial_state)
-        
+
+        # 运行 Graph，传递config
+        if config:
+            final_state = self.graph.invoke(initial_state, config)
+        else:
+            final_state = self.graph.invoke(initial_state)
+
         # 提取最终结果
         final_message = final_state["messages"][-1].content
-        
+
         return {
             "response": final_message,
             "thought_process": final_state.get("thought"),
@@ -365,20 +378,25 @@ class ChatFlow:
             "full_history": final_state["messages"]
         }
 
-    async def astream(self, user_input: str, history: List[AnyMessage] = None):
+    async def astream(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None):
         """
         异步流式调用 ChatFlow。
-        
+
         由于旧版 LangGraph 不支持 get_stream_writer，
         我们使用 updates 模式运行图到 prepare_for_generation 节点，
         然后手动执行流式 LLM 调用。
+
+        Args:
+            user_input: 用户输入
+            history: 对话历史
+            config: 可选的配置对象，包含运行时配置（如timem_kb_id）
         """
         if history is None:
             history = []
-            
+
         # 添加最新的用户消息
         history.append(HumanMessage(content=user_input))
-        
+
         initial_state = ChatFlowState(
             messages=history,
             thought=None,
@@ -387,14 +405,19 @@ class ChatFlow:
             reply_suggestion=None,
             session_title_suggestion=None
         )
-        
+
         print(f"DEBUG [astream]: Starting with stream_mode='updates'...")
         chain = None
         prompt_input = None
-        
-        # 使用 updates 模式运行图
+
+        # 使用 updates 模式运行图，传递config
         try:
-            async for event in self.graph.astream(initial_state, stream_mode="updates"):
+            if config:
+                stream_iter = self.graph.astream(initial_state, stream_mode="updates", config=config)
+            else:
+                stream_iter = self.graph.astream(initial_state, stream_mode="updates")
+
+            async for event in stream_iter:
                 node_name = list(event.keys())[0] if event else None
                 print(f"DEBUG [astream]: Node completed: {node_name}")
                 
