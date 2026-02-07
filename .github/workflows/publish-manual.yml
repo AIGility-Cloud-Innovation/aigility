@@ -29,18 +29,22 @@ jobs:
           ver="${{ github.event.inputs.version }}"
           echo "Updating version to $ver"
           sed -i -E "s/^version\s*=\s*\".*\"/version = \"$ver\"/" pyproject.toml
-          sed -i -E "s/^__version__\s*=\s*\".*\"/__version__ = \"$ver\"/" aicv/__init__.py
+          sed -i -E "s/^__version__\s*=\s*\".*\"/__version__ = \"$ver\"/" aigility/__init__.py
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add pyproject.toml aicv/__init__.py
+          git add pyproject.toml aigility/__init__.py
           git commit -m "chore(release): v$ver" || echo "No changes to commit"
-          git tag "v$ver" -m "aicv-python v$ver" || echo "Tag exists"
+          git tag "v$ver" -m "aigility v$ver" || echo "Tag exists"
           git push origin HEAD
           git push origin "v$ver" || echo "Tag already pushed"
 
   publish:
     needs: prepare_tag
     runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 

@@ -3,7 +3,7 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - "v*" # 当推送以 v 开头的 tag 时自动触发
+      - "v*"
   release:
     types: [published]
   workflow_dispatch:
@@ -20,9 +20,10 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       contents: read
-      id-token: write # 用于PyPI的信任发布
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -40,7 +41,6 @@ jobs:
 
       - name: Clean dist directory before build
         run: |
-          # 清空 dist 目录，确保只包含本次构建的文件
           rm -rf dist/*
           echo "Cleaned dist directory"
 
@@ -66,5 +66,4 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target != 'testpypi')
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist/
