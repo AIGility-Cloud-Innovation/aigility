@@ -46,12 +46,12 @@ class Memory:
     - 通过工厂模式创建 Provider
     """
 
-    def __init__(self, config: MemoryConfig):
+    def __init__(self, config: Optional[MemoryConfig] = None):
         """
         初始化 Memory 实例
 
         Args:
-            config: Memory 配置对象（必须传入）
+            config: Memory 配置对象，不传时使用默认配置（从环境变量读取）
 
         Examples:
             >>> from aigility.memory import Memory, MemoryConfig
@@ -69,6 +69,9 @@ class Memory:
             ... )
             >>> memory = Memory(config=config)
         """
+        if config is None:
+            config = MemoryConfig()
+
         if not isinstance(config, MemoryConfig):
             raise TypeError(
                 f"config 必须是 MemoryConfig 类型，获取到: {type(config)}"

@@ -106,11 +106,11 @@ client = create_timem_rag_client(
     api_key="your-api-key"
 )
 
-# 异步搜索
-result = await client.search(query="搜索内容", top_k=5)
+# 异步搜索（需要指定知识库 kb_id）
+result = await client.search(query="搜索内容", kb_id="kb_xxx")
 
-# 同步搜索
-result = client.search_sync(query="搜索内容", top_k=5)
+# 同步搜索（需要指定知识库 kb_id）
+result = client.search_sync(query="搜索内容", kb_id="kb_xxx")
 ```
 
 ### 2. 健康检查
@@ -141,7 +141,7 @@ aigility/
 │   ├── flow.py            # ChatFlow 实现（集成 TimeMRAGClient）
 │   ├── schema.py          # TimeMRAGTool 工具定义
 │   └── prompts/
-│       └── chat_flow_config.yaml  # Prompt 配置
+│       └── assistant.yaml  # Prompt 配置
 ├── rag/
 │   └── client.py          # TimeMRAGClient 实现
 └── chat/
@@ -186,11 +186,11 @@ config = ADKConfig(timem_enabled=False)
 
 1. 在 `schema.py` 中定义新的工具类
 2. 在 `flow.py` 的 `_tool_executor` 中添加处理逻辑
-3. 在 `chat_flow_config.yaml` 中添加工具说明
+3. 在 `assistant.yaml` 中添加工具说明
 
 ### 自定义 Prompt
 
-修改 `chat_flow_config.yaml` 中的 prompt 来自定义 Agent 的行为：
+修改 `assistant.yaml` 中的 prompt 来自定义 Agent 的行为：
 
 - `agent_decision_prompt`: 控制 Agent 如何决策是否调用工具
 - `final_response_prompt`: 控制最终回复的生成方式

@@ -162,6 +162,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: marks tests that require external integration services",
+]
 addopts = [
     "--strict-markers",
     "--strict-config",

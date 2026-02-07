@@ -6,7 +6,7 @@ import sys
 import shutil
 import hashlib
 import logging
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 
 # 加载 .env 文件
 try:
@@ -202,6 +202,7 @@ class RAGService:
         Args:
             expand_context: 是否启用利用 metadata 进行上下文补全
         """
+        docs: List[Any] = []
         try:
             # 1. 基础检索
             docs = self.vector_store.similarity_search(query, k=self.config.search_top_k)
@@ -298,6 +299,8 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ Search failed: {str(e)}")
             # 降级策略：如果高级融合失败，回退到简单拼接
+            if not docs:
+                return ""
             return "\n".join([d.page_content for d in docs])
 
     def clear_knowledge_base(self):

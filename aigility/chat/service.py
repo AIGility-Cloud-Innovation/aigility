@@ -33,10 +33,10 @@ class ChatService:
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
         timem_kb_id = request.kb_id if request.kb_id else "kb_default"
         config = RunnableConfig(
-        configurable={
-            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
-        }
-    )
+            configurable={
+                "timem_kb_id": timem_kb_id,  # 商家对应在太忆云的 KB ID
+            }
+        )
         # 模拟历史记录的获取（当前版本简化为只处理当前请求）
         # 在实际应用中，这里会从数据库或缓存中加载历史消息
         history = [] 
@@ -87,14 +87,13 @@ class ChatService:
         """
         处理流式聊天请求。
         """
-        session_id = request.session_id if request.session_id else str(uuid.uuid4())
         history = []
         timem_kb_id = request.kb_id if request.kb_id else "kb_default"
         config = RunnableConfig(
-        configurable={
-            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
-        }
-    )
+            configurable={
+                "timem_kb_id": timem_kb_id,  # 商家对应在太忆云的 KB ID
+            }
+        )
         async for event in self.chat_flow.astream(
             user_input=request.user_input,
             history=history,
@@ -164,7 +163,7 @@ if __name__ == "__main__":
         llm_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
         llm_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        timem_enabled=os.getenv("TIMEM_ENABLED", "false").lower() == "true",  # 关闭太忆 RAG
+        timem_enabled=os.getenv("TIMEM_ENABLED", "false").lower() == "true",  # 是否启用太忆 RAG
         timem_api_key=os.getenv("TIMEM_API_KEY"),
         timem_base_url=os.getenv("TIMEM_BASE_URL")
     )
