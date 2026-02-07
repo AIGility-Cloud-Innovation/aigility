@@ -7,13 +7,14 @@
 - **RAG 检索增强生成**
   - 基础 RAG 服务：文档摄取、向量化、语义检索
   - 工作流模式 RAG：基于 LangGraph 的可组合 RAG 工作流
-  - 多 Embedding 支持：DashScope、HuggingFace 等
-  - 多向量存储支持：Chroma、FAISS、Milvus 等
+  - 多 Embedding 支持：DashScope、HuggingFace、ZhipuAI 等
+  - 多向量存储支持：Chroma、FAISS、Milvus、Qdrant 等
+  - 太忆（TiMem）RAG 云服务集成（ChatFlow 工具调用）
 
 - **记忆管理**
   - 持久化对话历史
   - 语义记忆检索
-  - 可扩展的记忆存储
+  - 可扩展的记忆存储（已集成 TiMem Memory Provider）
 
 - **对话流管理**
   - 基于 LangGraph 的对话流编排
@@ -105,6 +106,8 @@ agent = client.create_chat_agent(name="my_agent")
 
 - [开发指南](DEVELOPMENT.md) - 详细的开发文档和架构说明
 - [示例代码](examples/) - 各种使用场景的示例代码
+- [Provider 使用文档与配置示例](aigility/docs/readme.md) - LLM/Embedding/向量库/Memory Provider 说明
+- [太忆(TiMem) RAG 集成指南](docs/timem_rag_integration.md) - ChatFlow 中的 RAG 工具接入
 
 ## 项目结构
 
@@ -118,6 +121,7 @@ aigility/
 ├── rag/            # RAG 检索增强生成
 │   ├── service.py  # RAG 服务
 │   ├── workflow.py # RAG 工作流
+│   ├── client.py   # TiMem RAG 客户端
 │   ├── embeddings/ # Embedding 模型
 │   ├── vector_stores/ # 向量存储
 │   └── ingestion.py # 文档摄取
@@ -131,6 +135,8 @@ aigility/
 - **LangGraph**: 对话流和工作流编排
 - **Chroma/FAISS/Milvus**: 向量存储
 - **DashScope/HuggingFace**: Embedding 模型
+- **Qdrant**: 向量存储
+- **TiMem**: Memory/RAG 云服务
 
 ## 许可证
 
