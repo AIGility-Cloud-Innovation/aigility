@@ -93,9 +93,11 @@ class TimeMRAGClient:
             )
 
             # 解析响应（根据服务端 SearchResponse 格式）
-            if response.get("status") == "success":
-                results = response.get("results", [])
-                total_results = response.get("total_results", 0)
+            # 服务端返回格式: {"code": 200, "message": "success", "data": {"results": [...], "total_results": N}}
+            if response.get("code") == 200 and response.get("message") == "success":
+                data = response.get("data", {})
+                results = data.get("results", [])
+                total_results = data.get("total_results", 0)
 
                 if total_results == 0 or not results:
                     return f"未找到关于 '{query}' 的相关信息。"
