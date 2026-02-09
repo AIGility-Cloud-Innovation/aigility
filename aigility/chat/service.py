@@ -31,7 +31,7 @@ class ChatService:
             包含 AI 回复、建议和流程信息的响应对象。
         """
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
-        timem_kb_id = request.kb_id if request.kb_id else "kb_default"
+        timem_kb_id = request.kb_id if request.kb_id else "kb_bb6a7f70f63a"
         config = RunnableConfig(
         configurable={
             "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
@@ -89,7 +89,7 @@ class ChatService:
         """
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
         history = []
-        timem_kb_id = request.kb_id if request.kb_id else "kb_default"
+        timem_kb_id = request.kb_id if request.kb_id else "kb_bb6a7f70f63a"
         config = RunnableConfig(
         configurable={
             "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
