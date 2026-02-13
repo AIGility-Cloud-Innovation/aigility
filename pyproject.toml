@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aigility"
-version = "0.0.3"
+version = "0.0.4"
 description = "A modern Python ADK - Agent Development Kit for building AI agents with LangGraph and LangChain. This library provides a comprehensive, type-safe framework for developing intelligent agents with chat, workflow, memory, and knowledge management capabilities."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -40,12 +40,10 @@ dependencies = [
     "langchain-anthropic>=0.1.0",
     "langchain-core>=0.1.0",
     "langchain-community>=0.0.20",
-    "langchain-huggingface>=0.0.1",
     "langchain-chroma>=0.1.0",
     "python-docx>=0.8.0",
     "pandas>=2.0.0",
     "pdfplumber>=0.9.0",
-    "sentence-transformers>=2.2.0",
     "chromadb>=0.4.0",
     "openpyxl>=3.1.0",
     "jieba>=0.42.0",

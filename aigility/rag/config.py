@@ -38,7 +38,7 @@ VectorStoreProviderType = Literal["chroma", "milvus", "faiss", "qdrant"]
 class EmbeddingConfig(BaseModel):
     """
     嵌入模型配置
-    
+
     Attributes:
         provider: 模型提供商 ("huggingface" | "dashscope" | "openai" | "zhipuai")
         model_name: 模型名称
@@ -48,7 +48,7 @@ class EmbeddingConfig(BaseModel):
         default_dim: 向量维度（可选，用于校验）
     """
     provider: EmbeddingProviderType = Field(
-        default="huggingface",
+        default="dashscope",
         description="模型提供商: huggingface(本地) / dashscope / openai / zhipuai"
     )
     model_name: str = Field(
