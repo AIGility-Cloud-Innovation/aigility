@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aigility"
-version = "0.0.4"
+version = "0.0.5"
 description = "A modern Python ADK - Agent Development Kit for building AI agents with LangGraph and LangChain. This library provides a comprehensive, type-safe framework for developing intelligent agents with chat, workflow, memory, and knowledge management capabilities."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -32,45 +32,44 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.24.0",
+    "httpx-sse>=0.4.0",
     "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
     "typing-extensions>=4.0.0",
-    "langchain>=0.1.0",
+    "langchain-core>=0.1.0",
     "langgraph>=0.0.20",
     "langchain-openai>=0.0.5",
-    "langchain-anthropic>=0.1.0",
-    "langchain-core>=0.1.0",
-    "langchain-community>=0.0.20",
-    "langchain-chroma>=0.1.0",
-    "python-docx>=0.8.0",
-    "pandas>=2.0.0",
-    "pdfplumber>=0.9.0",
-    "chromadb>=0.4.0",
-    "openpyxl>=3.1.0",
-    "jieba>=0.42.0",
-    "scikit-learn>=1.0.0",
-    "timem-ai>=0.1.0",
-    "zai-sdk>=0.2.0",
-    "qdrant-client>=1.7.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-# RAG module dependencies
-rag = [
-    "langchain-core>=0.1.0",
-    "langchain-community>=0.0.20",
+# ============================================================
+# 核心增强功能 (Core enhancements)
+# ============================================================
+# Anthropic LLM support
+anthropic = [
+    "langchain-anthropic>=0.1.0",
 ]
 
-# Embedding model dependencies
+# ============================================================
+# RAG 功能模块 (RAG features)
+# ============================================================
+# RAG 核心依赖 (最小RAG功能)
+rag = [
+    "langchain-community>=0.0.20",
+    "langchain-text-splitters>=0.1.0",
+]
+
+# Embedding 模型支持
 embedding-huggingface = [
     "sentence-transformers>=2.2.0",
     "langchain-huggingface>=0.0.1",
 ]
 embedding-dashscope = [
     "openai>=1.0.0",
-    "langchain-openai>=0.0.5",
 ]
 
-# Vector store dependencies
+# 向量库支持
 vectorstore-chroma = [
     "chromadb>=0.4.0",
     "langchain-chroma>=0.1.0",
@@ -83,27 +82,79 @@ vectorstore-milvus = [
     "pymilvus>=2.3.0",
     "langchain-milvus>=0.1.0",
 ]
+vectorstore-qdrant = [
+    "qdrant-client>=1.7.0",
+    "langchain-community>=0.0.20",
+]
 
-# Document processing dependencies
+# 文档处理支持
 doc-pdf = [
     "pdfplumber>=0.9.0",
 ]
 doc-word = [
     "python-docx>=0.8.0",
 ]
+doc-excel = [
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+]
+
+# NLP 处理支持
 nlp = [
     "jieba>=0.42.0",
     "scikit-learn>=1.0.0",
 ]
 
-# Full RAG functionality (recommended)
-rag-full = [
+# ============================================================
+# 第三方服务集成 (Third-party services)
+# ============================================================
+# 太忆 RAG 服务
+timem = [
+    "timem-ai>=0.1.0",
+]
+# 太忆 RAG 完整功能 (太忆 + 文档处理)
+timem-rag = [
+    "aigility[timem]",
+    "aigility[doc-pdf]",
+    "aigility[doc-word]",
+    "aigility[doc-excel]",
+    "aigility[nlp]",
+]
+# 在智 embedding 服务
+zai = [
+    "zai-sdk>=0.2.0",
+]
+
+# ============================================================
+# 完整功能组合 (Complete feature bundles)
+# ============================================================
+# 完整 RAG 功能 (使用本地 HuggingFace + Chroma)
+rag-local = [
     "aigility[rag]",
     "aigility[embedding-huggingface]",
     "aigility[vectorstore-chroma]",
     "aigility[doc-pdf]",
     "aigility[doc-word]",
+    "aigility[doc-excel]",
     "aigility[nlp]",
+]
+
+# 完整 RAG 功能 (使用 Qdrant)
+rag-qdrant = [
+    "aigility[rag]",
+    "aigility[vectorstore-qdrant]",
+    "aigility[doc-pdf]",
+    "aigility[doc-word]",
+    "aigility[doc-excel]",
+    "aigility[nlp]",
+]
+
+# 全功能 (包含所有可选功能)
+all = [
+    "aigility[anthropic]",
+    "aigility[rag-local]",
+    "aigility[timem-rag]",
+    "aigility[zai]",
 ]
 
 dev = [

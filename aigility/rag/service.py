@@ -398,7 +398,7 @@ if __name__ == "__main__":
     )
     
     print(f"\n📋 配置信息:")
-    print(f"   - Embedding: {config.embedding.provider} / {config.embedding.model_name}")
+    print(f"   - Embedding: {config.embedding.provider} / {config.embedding.model_name} / {config.embedding.api_key}")
     print(f"   - VectorStore: {config.vector_store.provider}")
     print(f"   - 持久化路径: {config.vector_store.get_persist_path()}")
     print(f"   - Chunk Size: {config.ingestion.chunk_size}, Overlap: {config.ingestion.chunk_overlap}")

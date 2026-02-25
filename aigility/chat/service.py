@@ -1,4 +1,5 @@
 import uuid
+import time
 from typing import List, Dict, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel as LangchainBaseModel, Field as LangchainField
@@ -23,15 +24,17 @@ class ChatService:
     def process_chat(self, request: ChatRequest) -> ChatResponse:
         """
         处理聊天请求，调用 LangGraph ChatFlow。
-        
+
         Args:
             request: 包含用户输入和会话ID的请求对象。
-            
+
         Returns:
             包含 AI 回复、建议和流程信息的响应对象。
         """
+        start_time = time.perf_counter()
+
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
-        timem_kb_id = request.kb_id if request.kb_id else "kb_bb6a7f70f63a"
+        timem_kb_id = request.kb_id if request.kb_id else "kn1"
         config = RunnableConfig(
             configurable={
                 "timem_kb_id": timem_kb_id,  # 商家对应在太忆云的 KB ID
@@ -39,15 +42,22 @@ class ChatService:
         )
         # 模拟历史记录的获取（当前版本简化为只处理当前请求）
         # 在实际应用中，这里会从数据库或缓存中加载历史消息
-        history = [] 
-        
+        history = []
+
         # 调用 ChatFlow
+        flow_start = time.perf_counter()
         flow_result = self.chat_flow.invoke(
             user_input=request.user_input,
             history=history,
-            config=config
+            config=config,
+            rag_used=request.rag_used
         )
-        
+        flow_elapsed = (time.perf_counter() - flow_start) * 1
+
+        print(f"\n{'─'*60}")
+        print(f"⏱️ [ADK性能] ChatFlow.invoke 总耗时: {flow_elapsed:.2f}s")
+        print(f"{'─'*60}\n")
+
         # 解析回复建议
         reply_suggestions = []
         if flow_result.get("reply_suggestions"):
@@ -72,6 +82,7 @@ class ChatService:
         reply_suggestions = [] # 返回空列表
 
         # 构建 ChatResponse
+        build_start = time.perf_counter()
         response = ChatResponse(
             response=flow_result["response"],
             session_id=session_id,
@@ -80,7 +91,12 @@ class ChatService:
             thought_process=flow_result.get("thought_process"),
             tool_results=tool_results_list
         )
-        
+        build_elapsed = (time.perf_counter() - build_start) * 1
+        total_elapsed = (time.perf_counter() - start_time) * 1
+
+        print(f"⏱️ [ADK性能] 响应构建耗时: {build_elapsed:.2f}s")
+        print(f"⏱️ [ADK性能] process_chat 总耗时: {total_elapsed:.2f}s\n")
+
         return response
 
     async def process_chat_stream(self, request: ChatRequest):
@@ -97,7 +113,8 @@ class ChatService:
         async for event in self.chat_flow.astream(
             user_input=request.user_input,
             history=history,
-            config=config
+            config=config,
+            rag_used=request.rag_used
         ):
             yield event
 
@@ -146,49 +163,18 @@ class ChatService:
         except Exception as e:
             print(f"Suggestion generation failed: {e}")
             return ["请重试", "报告错误"]
-# -------------------- 
+# --------------------
 # 对聊天服务的测试
 # --------------------
-if __name__ == "__main__":
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()  # 加载 .env 文件
-    from aigility.core.config import ADKConfig
-    from aigility.chat.service import ChatService
-    from aigility.chat.schema import ChatRequest
+def print_test_header(title: str):
+    """打印测试标题分隔符"""
+    print("\n" + "=" * 80)
+    print(f"  【测试】{title}")
+    print("=" * 80 + "\n")
 
-    # 初始化配置（从环境变量读取 DeepSeek 配置）
-    config = ADKConfig(
-        llm_provider="deepseek",  # 使用 DeepSeek
-        llm_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-        llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
-        llm_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        timem_enabled=os.getenv("TIMEM_ENABLED", "false").lower() == "true",  # 是否启用太忆 RAG
-        timem_api_key=os.getenv("TIMEM_API_KEY"),
-        timem_base_url=os.getenv("TIMEM_BASE_URL")
-    )
 
-    # 创建聊天服务
-    chat_service = ChatService(adk_config=config)
-
-    # 构建聊天请求
-    chat_request = ChatRequest(
-        user_input="Mac主要包含哪六大产品系列？",
-        session_id=None
-    )
-
-    # 处理聊天请求
-    chat_response = chat_service.process_chat(chat_request)
-
-    # 输出响应
-    print("=" * 80)
-    print("AI 回复:", chat_response.response)
-    print("会话 ID:", chat_response.session_id)
-    print("会话标题:", chat_response.session_title)
-    print("回复建议:", chat_response.reply_suggestions)
-    print("=" * 80)
-
-    # 检查是否使用了 RAG
+def print_rag_status(chat_response):
+    """打印 RAG 使用情况"""
     print("\n【RAG 使用情况】")
     if chat_response.tool_results:
         print(f"✓ 使用了工具调用，共 {len(chat_response.tool_results)} 个工具被调用")
@@ -225,4 +211,90 @@ if __name__ == "__main__":
         print("\n【思考过程】")
         print(chat_response.thought_process)
 
+
+if __name__ == "__main__":
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()  # 加载 .env 文件
+    from aigility.core.config import ADKConfig
+    from aigility.chat.service import ChatService
+    from aigility.chat.schema import ChatRequest
+
+    # 初始化配置（从环境变量读取 DeepSeek 配置）
+    config = ADKConfig(
+        llm_provider="deepseek",  # 使用 DeepSeek
+        llm_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        llm_api_key=os.getenv("DEEPSEEK_API_KEY"),
+        llm_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        timem_enabled=os.getenv("TIMEM_ENABLED", "true").lower() == "true",  # 启用太忆 RAG
+        timem_api_key=os.getenv("TIMEM_API_KEY"),
+        timem_base_url=os.getenv("TIMEM_BASE_URL")
+    )
+
+    # 创建聊天服务
+    chat_service = ChatService(adk_config=config)
+
+    # 测试用户输入
+    test_query = "Mac的iCloud操作"
+    test_kb_id = "kb_57220503e2eb"
+
+    # ========== 测试 1: rag_used = "auto" ==========
+    print_test_header("测试 1: rag_used = 'auto' (AI 自行决策)")
+
+    chat_request_auto = ChatRequest(
+        user_input=test_query,
+        session_id="1",
+        kb_id=test_kb_id,
+        rag_used="auto"
+    )
+
+    chat_response_auto = chat_service.process_chat(chat_request_auto)
+
+    print(f"\n📝 AI 回复: {chat_response_auto.response}")
+    print(f"🆔 会话 ID: {chat_response_auto.session_id}")
+    print_rag_status(chat_response_auto)
+
+    # ========== 测试 2: rag_used = "on" ==========
+    print_test_header("测试 2: rag_used = 'on' (强制使用 RAG)")
+
+    chat_request_on = ChatRequest(
+        user_input=test_query,
+        session_id="2",
+        kb_id=test_kb_id,
+        rag_used="on"
+    )
+
+    chat_response_on = chat_service.process_chat(chat_request_on)
+
+    print(f"\n📝 AI 回复: {chat_response_on.response}")
+    print(f"🆔 会话 ID: {chat_response_on.session_id}")
+    print_rag_status(chat_response_on)
+
+    # ========== 测试 3: rag_used = "off" ==========
+    print_test_header("测试 3: rag_used = 'off' (强制不使用 RAG)")
+
+    chat_request_off = ChatRequest(
+        user_input=test_query,
+        session_id="3",
+        kb_id=test_kb_id,
+        rag_used="off"
+    )
+
+    chat_response_off = chat_service.process_chat(chat_request_off)
+
+    print(f"\n📝 AI 回复: {chat_response_off.response}")
+    print(f"🆔 会话 ID: {chat_response_off.session_id}")
+    print_rag_status(chat_response_off)
+
+    # ========== 测试对比总结 ==========
+    print("\n" + "=" * 80)
+    print("  【测试对比总结】")
     print("=" * 80)
+    print(f"\n原始查询: {test_query}")
+    print(f"知识库ID: {test_kb_id}\n")
+
+    print("模式对比:")
+    print(f"  1. auto 模式 - 工具调用数: {len(chat_response_auto.tool_results) if chat_response_auto.tool_results else 0}")
+    print(f"  2. on   模式 - 工具调用数: {len(chat_response_on.tool_results) if chat_response_on.tool_results else 0}")
+    print(f"  3. off  模式 - 工具调用数: {len(chat_response_off.tool_results) if chat_response_off.tool_results else 0}")
+    print("\n" + "=" * 80)

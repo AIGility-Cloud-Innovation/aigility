@@ -1,11 +1,18 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 class ChatRequest(BaseModel):
     """用户发送的聊天请求模型"""
     user_input: str = Field(..., description="用户输入的文本内容")
     session_id: Optional[str] = Field(None, description="会话ID，用于恢复历史记录")
     kb_id: Optional[str] = Field(None, description="知识库ID，用于指定RAG检索的知识库")
+    rag_used: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description="""RAG使用模式:
+- auto: 启动决策节点，由AI决定是否使用RAG
+- on: 默认打开RAG，跳过决策节点
+- off: 默认关闭RAG，跳过决策节点"""
+    )
     
 class ChatResponse(BaseModel):
     """聊天回复模型"""
