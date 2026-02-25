@@ -27,9 +27,42 @@
 
 ## 安装
 
+### 核心安装（推荐）
+
+只安装核心依赖，包含聊天、工作流、内存管理等基础功能：
+
 ```bash
 pip install aigility
 ```
+
+### 完整安装
+
+如需使用 RAG、向量存储、文档处理等高级功能：
+
+```bash
+# 安装所有可选功能
+pip install "aigility[all]"
+
+# 或者只安装需要的模块
+pip install "aigility[rag-local]"     # 本地 RAG (HuggingFace + Chroma)
+pip install "aigility[rag-qdrant]"    # Qdrant RAG
+pip install "aigility[timem]"         # 太忆 RAG 服务
+pip install "aigility[anthropic]"     # Anthropic LLM 支持
+```
+
+### 可选功能模块
+
+| 模块 | 说明 | 安装命令 |
+|------|------|----------|
+| `anthropic` | Anthropic Claude 支持 | `pip install "aigility[anthropic]"` |
+| `rag-local` | 本地 RAG (HuggingFace + Chroma) | `pip install "aigility[rag-local]"` |
+| `rag-qdrant` | Qdrant RAG | `pip install "aigility[rag-qdrant]"` |
+| `timem` | 太忆 RAG 服务 | `pip install "aigility[timem]"` |
+| `timem-rag` | 太忆 RAG 完整功能 (含文档处理) | `pip install "aigility[timem-rag]"` |
+| `zai` | 在智 embedding 服务 | `pip install "aigility[zai]"` |
+| `all` | 所有功能 | `pip install "aigility[all]"` |
+
+**注意**：`rag-local` 会下载 HuggingFace 模型（约 500MB-2GB），安装时间较长
 
 ## 快速开始
 

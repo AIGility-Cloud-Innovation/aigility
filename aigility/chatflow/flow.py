@@ -2,6 +2,7 @@ import uuid
 import yaml
 import os
 import json
+import time
 from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -17,7 +18,7 @@ from .schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, 
 # --- 1. 辅助函数：加载配置 ---
 def load_default_config() -> Dict[str, Any]:
     """Load the chat flow configuration from the YAML file."""
-    config_path = os.path.join(os.path.dirname(__file__), "prompts", "assistant.yaml")
+    config_path = os.path.join(os.path.dirname(__file__), "prompts", "chat.yaml")
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
@@ -97,7 +98,27 @@ class ChatFlow:
         Node 1: Agent 决策节点。
         使用 LLM 和 CoT Prompt 决定是否调用工具。
         """
-        print("--- [ADK] Executing Agent Decision Node ---")
+        node_start = time.perf_counter()
+
+        # 检查 rag_used 模式
+        rag_used = state.get("rag_used", "auto")
+
+        # 如果不是 auto 模式，直接返回预设的状态
+        if rag_used == "on":
+            print("--- [ADK] 🚀 RAG 模式已开启，跳过决策节点，直接使用 RAG ---")
+            # on 模式下，tool_calls 应该已经在 invoke 中预设好了
+            if state.get("tool_calls"):
+                return {"thought": state.get("thought", "RAG 模式已开启")}
+            else:
+                # 如果没有预设 tool_calls，说明 RAG 客户端未配置
+                return {"thought": state.get("thought", "RAG 服务未配置"), "tool_calls": []}
+
+        elif rag_used == "off":
+            print("--- [ADK] 🔒 RAG 模式已关闭，跳过决策节点 ---")
+            return {"thought": state.get("thought", "RAG 模式已关闭"), "tool_calls": []}
+
+        # auto 模式：执行决策节点
+        print("--- [ADK] 🔍 执行 Agent Decision 节点 (auto 模式) ---")
 
         # 如果太忆 RAG 未启用，跳过工具调用
         if not self.timem_rag_client:
@@ -194,9 +215,14 @@ class ChatFlow:
                 # 格式: [{'tool_name': 'TimeMRAGTool', 'query': '...'}]
                 for tc in parsed:
                     if isinstance(tc, dict) and 'tool_name' in tc and 'query' in tc:
+                        # 如果是 RAG 工具，强制使用用户原始输入作为 query
+                        query = tc['query']
+                        if tc['tool_name'] == 'TimeMRAGTool':
+                            query = user_input
+                            print(f"--- [ADK] 🔧 强制使用用户输入作为 RAG query: {user_input[:50]}... ---")
                         tool_calls.append(ToolCall(
                             tool_name=tc['tool_name'],
-                            query=tc['query']
+                            query=query
                         ))
                 thought = f"决定调用工具: {', '.join([tc.tool_name for tc in tool_calls])}"
 
@@ -205,20 +231,32 @@ class ChatFlow:
                     # 标准格式: {"thought": "...", "tool_calls": [...]}
                     thought = parsed.get('thought', '思考过程未生成')
                     for tc in parsed.get('tool_calls', []):
+                        # 如果是 RAG 工具，强制使用用户原始输入作为 query
+                        query = tc['query']
+                        if tc['tool_name'] == 'TimeMRAGTool':
+                            query = user_input
+                            print(f"--- [ADK] 🔧 强制使用用户输入作为 RAG query: {user_input[:50]}... ---")
                         tool_calls.append(ToolCall(
                             tool_name=tc['tool_name'],
-                            query=tc['query']
+                            query=query
                         ))
                 elif 'tool_name' in parsed and 'query' in parsed:
                     # 单个工具: {'tool_name': 'TimeMRAGTool', 'query': '...'}
+                    query = parsed['query']
+                    if parsed['tool_name'] == 'TimeMRAGTool':
+                        query = user_input
+                        print(f"--- [ADK] 🔧 强制使用用户输入作为 RAG query: {user_input[:50]}... ---")
                     tool_calls.append(ToolCall(
                         tool_name=parsed['tool_name'],
-                        query=parsed['query']
+                        query=query
                     ))
                     thought = f"决定调用工具: {parsed['tool_name']}"
 
             if self.adk_config.debug:
                 print(f"--- [ADK] Agent Decision: thought={thought}, tool_calls={len(tool_calls)} ---")
+
+            node_elapsed = (time.perf_counter() - node_start) * 1
+            print(f"⏱️ [ADK性能] Agent Decision 节点耗时: {node_elapsed:.2f}s")
 
             return {
                 "thought": thought,
@@ -230,6 +268,8 @@ class ChatFlow:
             print(f"--- [ADK] Agent decision failed: {e} ---")
             if self.adk_config.debug:
                 print(f"--- [ADK] Traceback: {traceback.format_exc()} ---")
+            node_elapsed = (time.perf_counter() - node_start) * 1
+            print(f"⏱️ [ADK性能] Agent Decision 节点耗时(失败): {node_elapsed:.2f}s")
             return {"thought": f"决策过程出错: {str(e)}", "tool_calls": []}
 
     def _should_continue(self, state: ChatFlowState) -> str:
@@ -245,6 +285,7 @@ class ChatFlow:
         Node 2: 工具执行节点。
         模拟执行 RAG 和 Web Search 工具。
         """
+        node_start = time.perf_counter()
         # print("--- Executing Tool Executor Node ---")
         tool_calls: List[ToolCall] = state["tool_calls"]
         tool_results: List[ToolResult] = []
@@ -258,9 +299,15 @@ class ChatFlow:
             # 根据工具名称执行不同的操作
             if tool_name == "TimeMRAGTool":
                 # 使用太忆 RAG 云服务
+                rag_start = time.perf_counter()
                 if self.timem_rag_client:
                     result = self.timem_rag_client.search_sync(query=query, kb_id=target_kb_id)
-                    print(f"✅成功调用太忆RAG服务：--- [ADK] TimeM RAG search for '{query}': {result} ---")
+                    rag_elapsed = (time.perf_counter() - rag_start) * 1
+
+                    # 根据结果判断是否成功，避免误导性的成功提示
+                    is_success = not result.startswith("搜索出错") and not result.startswith("搜索失败")
+                    status_icon = "✅" if is_success else "❌"
+                    print(f"{status_icon}调用太忆RAG服务：--- [ADK] TimeM RAG search for '{query}' (耗时: {rag_elapsed:.2f}s): {result} ---")
                 else:
                     result = f"❌错误：太忆 RAG 服务未配置。现在的配置：url：{self.adk_config.timem_base_url},apikey：{self.adk_config.timem_api_key}"
             elif tool_name == "WebSearchTool":
@@ -273,6 +320,9 @@ class ChatFlow:
             # 将工具结果添加到消息历史中，以便 LLM 在下一步使用
             state["messages"].append(ToolMessage(content=result, tool_call_id=tool_name))
 
+        node_elapsed = (time.perf_counter() - node_start) * 1
+        print(f"⏱️ [ADK性能] Tool Executor 节点总耗时: {node_elapsed:.2f}s")
+
         return {
             "tool_results": tool_results,
             "messages": state["messages"] # 更新后的消息列表
@@ -280,11 +330,29 @@ class ChatFlow:
 
     def _prepare_for_generation(self, state: ChatFlowState) -> Dict[str, Any]:
         """Node 3: 准备最终回复生成的 Prompt 和 Chain。"""
-        print("--- [ADK] Preparing for Final Response Generation ---")
-        
+        node_start = time.perf_counter()
+        print("--- [ADK] 📝 准备最终回复生成节点 ---")
+
         response_prompt = self.config.get("final_response_prompt", "")
-        history = "\n".join([f"{m.type.capitalize()}: {m.content}" for m in state["messages"][:-1]])
-        user_input = state["messages"][-1].content
+
+        # 正确获取用户输入：找到最后一条 HumanMessage
+        user_input = None
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                user_input = msg.content
+                break
+
+        if not user_input:
+            user_input = state["messages"][-1].content  # 降级方案
+
+        # 获取历史消息（排除最后一条 HumanMessage 之后的所有消息）
+        human_messages = [i for i, msg in enumerate(state["messages"]) if isinstance(msg, HumanMessage)]
+        if human_messages:
+            last_human_idx = human_messages[-1]
+            history = "\n".join([f"{m.type.capitalize()}: {m.content}" for m in state["messages"][:last_human_idx]])
+        else:
+            history = "\n".join([f"{m.type.capitalize()}: {m.content}" for m in state["messages"][:-1]])
+
         thought = state.get("thought", "无")
         tool_results_str = "\n".join([f"[{tr.tool_name}]: {tr.result}" for tr in state.get("tool_results", [])])
         if not tool_results_str:
@@ -303,7 +371,10 @@ class ChatFlow:
         )
 
         chain = prompt | self.llm | parser
-        
+
+        node_elapsed = (time.perf_counter() - node_start) * 1
+        print(f"⏱️ [ADK性能] Prepare for Generation 节点耗时: {node_elapsed:.2f}s")
+
         return {"chain": chain, "prompt_input": {
             "thought": thought,
             "tool_results": tool_results_str,
@@ -313,11 +384,12 @@ class ChatFlow:
 
     def _stream_response(self, state: ChatFlowState):
         """Node 4: 生成最终回复。
-        
+
         同步版本用于 invoke() 调用。
         流式处理在 astream 方法中手动完成。
         """
-        print("--- [ADK] Generating Final Response ---")
+        node_start = time.perf_counter()
+        print("--- [ADK] 💬 生成最终回复节点 ---")
         chain = state.get("chain")
         prompt_input = state.get("prompt_input")
         
@@ -326,16 +398,25 @@ class ChatFlow:
         
         # 同步调用 LLM
         try:
+            llm_start = time.perf_counter()
             response = chain.invoke(prompt_input)
+            llm_elapsed = (time.perf_counter() - llm_start) * 1
+            print(f"⏱️ [ADK性能] LLM invoke 耗时: {llm_elapsed:.2f}s")
+
+            node_elapsed = (time.perf_counter() - node_start) * 1
+            print(f"⏱️ [ADK性能] Stream Response 节点总耗时: {node_elapsed:.2f}s")
+
             if isinstance(response, str):
                 return {"messages": [AIMessage(content=response)]}
             else:
                 return {"messages": [AIMessage(content=str(response))]}
         except Exception as e:
+            node_elapsed = (time.perf_counter() - node_start) * 1
+            print(f"⏱️ [ADK性能] Stream Response 节点耗时(失败): {node_elapsed:.2f}s")
             print(f"Response generation failed: {e}")
             return {"messages": [AIMessage(content=f"抱歉，生成回复时发生错误: {e}")]}
 
-    def invoke(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None) -> Dict[str, Any]:
+    def invoke(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None, rag_used: str = "auto") -> Dict[str, Any]:
         """
         调用 ChatFlow，执行一次完整的对话流程。
 
@@ -343,10 +424,16 @@ class ChatFlow:
             user_input: 用户输入
             history: 对话历史
             config: 可选的配置对象，包含运行时配置（如timem_kb_id）
+            rag_used: RAG使用模式 ("auto", "on", "off")
+                - auto: 启动决策节点，由AI决定是否使用RAG
+                - on: 默认打开RAG，跳过决策节点
+                - off: 默认关闭RAG，跳过决策节点
 
         Returns:
             包含响应、思考过程、工具结果的字典
         """
+        invoke_start = time.perf_counter()
+
         if history is None:
             history = []
 
@@ -359,8 +446,30 @@ class ChatFlow:
             tool_calls=[],
             tool_results=[],
             reply_suggestion=None,
-            session_title_suggestion=None
+            session_title_suggestion=None,
+            rag_used=rag_used
         )
+
+        # 添加调试信息
+        print(f"--- [ADK] 📥 Invoke: rag_used={rag_used}, user_input={user_input[:50]}... ---")
+
+        # 根据 rag_used 参数决定是否预先设置工具调用
+        if rag_used == "on":
+            # 强制使用 RAG，跳过决策节点，直接设置工具调用
+            if self.timem_rag_client:
+                initial_state["tool_calls"] = [ToolCall(tool_name="TimeMRAGTool", query=user_input)]
+                initial_state["thought"] = "RAG模式已开启，强制调用RAG工具"
+                print(f"--- [ADK] ✅ RAG ON 模式: 已预设 tool_call for query: {user_input[:50]}... ---")
+            else:
+                initial_state["thought"] = "RAG模式已开启，但太忆RAG服务未配置"
+                print(f"--- [ADK] ❌ RAG ON 模式: 但 RAG 客户端未配置 ---")
+        elif rag_used == "off":
+            # 强制关闭 RAG，跳过决策节点
+            initial_state["thought"] = "RAG模式已关闭，不调用任何工具"
+            print(f"--- [ADK] 🔒 RAG OFF 模式: 禁用工具调用 ---")
+        # rag_used == "auto" 时，保持默认行为，让决策节点决定
+        else:
+            print(f"--- [ADK] 🤖 RAG AUTO 模式: 将由决策节点决定 ---")
 
         # 运行 Graph，传递config
         if config:
@@ -371,6 +480,11 @@ class ChatFlow:
         # 提取最终结果
         final_message = final_state["messages"][-1].content
 
+        invoke_elapsed = (time.perf_counter() - invoke_start) * 1
+        print(f"\n{'='*60}")
+        print(f"⏱️ [ADK性能] ChatFlow.invoke 总耗时: {invoke_elapsed:.2f}s")
+        print(f"{'='*60}\n")
+
         return {
             "response": final_message,
             "thought_process": final_state.get("thought"),
@@ -378,7 +492,7 @@ class ChatFlow:
             "full_history": final_state["messages"]
         }
 
-    async def astream(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None):
+    async def astream(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None, rag_used: str = "auto"):
         """
         异步流式调用 ChatFlow。
 
@@ -390,6 +504,10 @@ class ChatFlow:
             user_input: 用户输入
             history: 对话历史
             config: 可选的配置对象，包含运行时配置（如timem_kb_id）
+            rag_used: RAG使用模式 ("auto", "on", "off")
+                - auto: 启动决策节点，由AI决定是否使用RAG
+                - on: 默认打开RAG，跳过决策节点
+                - off: 默认关闭RAG，跳过决策节点
         """
         if history is None:
             history = []
@@ -403,8 +521,30 @@ class ChatFlow:
             tool_calls=[],
             tool_results=[],
             reply_suggestion=None,
-            session_title_suggestion=None
+            session_title_suggestion=None,
+            rag_used=rag_used
         )
+
+        # 添加调试信息
+        print(f"--- [ADK] 📥 Invoke: rag_used={rag_used}, user_input={user_input[:50]}... ---")
+
+        # 根据 rag_used 参数决定是否预先设置工具调用
+        if rag_used == "on":
+            # 强制使用 RAG，跳过决策节点，直接设置工具调用
+            if self.timem_rag_client:
+                initial_state["tool_calls"] = [ToolCall(tool_name="TimeMRAGTool", query=user_input)]
+                initial_state["thought"] = "RAG模式已开启，强制调用RAG工具"
+                print(f"--- [ADK] ✅ RAG ON 模式: 已预设 tool_call for query: {user_input[:50]}... ---")
+            else:
+                initial_state["thought"] = "RAG模式已开启，但太忆RAG服务未配置"
+                print(f"--- [ADK] ❌ RAG ON 模式: 但 RAG 客户端未配置 ---")
+        elif rag_used == "off":
+            # 强制关闭 RAG，跳过决策节点
+            initial_state["thought"] = "RAG模式已关闭，不调用任何工具"
+            print(f"--- [ADK] 🔒 RAG OFF 模式: 禁用工具调用 ---")
+        # rag_used == "auto" 时，保持默认行为，让决策节点决定
+        else:
+            print(f"--- [ADK] 🤖 RAG AUTO 模式: 将由决策节点决定 ---")
 
         print(f"DEBUG [astream]: Starting with stream_mode='updates'...")
         chain = None

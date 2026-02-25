@@ -1,109 +1,32 @@
-aiohappyeyeballs==2.6.1
-aiohttp==3.13.3
-aiosignal==1.4.0
-annotated-types==0.7.0
-anyio==4.12.1
-async-timeout==4.0.3
-attrs==25.4.0
-cachetools==6.2.4
-certifi==2026.1.4
-cffi==2.0.0
-charset-normalizer==3.4.4
-cryptography==46.0.3
-dataclasses-json==0.6.7
-distro==1.9.0
-exceptiongroup==1.3.1
-filelock==3.20.3
-frozenlist==1.8.0
-fsspec==2026.1.0
-grpcio==1.76.0
-h11==0.16.0
-h2==4.3.0
-hf-xet==1.2.0
-hpack==4.1.0
-httpcore==1.0.9
-httpx==0.28.1
-httpx-sse==0.4.3
-huggingface-hub==0.36.0
-hyperframe==6.1.0
-idna==3.11
-jieba==0.42.1
-Jinja2==3.1.6
-jiter==0.12.0
-joblib==1.5.3
-jsonpatch==1.33
-jsonpointer==3.0.0
-langchain==1.2.6
-langchain-classic==1.0.1
-langchain-community==0.4.1
-langchain-core==1.2.7
-langchain-huggingface==1.2.0
-langchain-openai==1.1.7
-langchain-qdrant==1.1.0
-langchain-text-splitters==1.1.0
-langgraph==1.0.6
-langgraph-checkpoint==4.0.0
-langgraph-prebuilt==1.0.6
-langgraph-sdk==0.3.3
-langsmith==0.6.4
-lxml==6.0.2
-MarkupSafe==3.0.3
-marshmallow==3.26.2
-mpmath==1.3.0
-multidict==6.7.0
-mypy_extensions==1.1.0
-networkx==3.4.2
-numpy==2.2.6
-openai==2.15.0
-orjson==3.11.5
-ormsgpack==1.12.2
-packaging==25.0
-pandas==2.3.3
-pdfminer.six==20251230
-pdfplumber==0.11.9
-pillow==12.1.0
-portalocker==3.2.0
-propcache==0.4.1
-protobuf==6.33.4
-psutil==7.2.1
-pycparser==2.23
-pydantic==2.12.5
-pydantic-settings==2.12.0
-pydantic_core==2.41.5
-PyJWT==2.10.1
-pypdfium2==5.3.0
-python-dateutil==2.9.0.post0
-python-docx==1.2.0
-python-dotenv==1.2.1
-pytz==2025.2
-PyYAML==6.0.3
-qdrant-client==1.16.2
-regex==2026.1.15
-requests==2.32.5
-requests-toolbelt==1.0.0
-safetensors==0.7.0
-scikit-learn==1.7.2
-scipy==1.15.3
-sentence-transformers==5.2.0
-six==1.17.0
-sniffio==1.3.1
-SQLAlchemy==2.0.45
-sympy==1.14.0
-tenacity==9.1.2
-threadpoolctl==3.6.0
-tiktoken==0.12.0
-timem-ai==0.1.4
-tokenizers==0.22.2
-torch==2.9.1
-tqdm==4.67.1
-transformers==4.57.6
-typing-inspect==0.9.0
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-tzdata==2025.3
-urllib3==2.6.3
-uuid_utils==0.13.0
-xxhash==3.6.0
-yarl==1.22.0
-zai-sdk==0.2.1
-zstandard==0.25.0
+# ============================================================
+# AIGility 核心依赖 (Core Dependencies)
+# ============================================================
+# 这个文件包含 AIGility 的核心依赖，安装速度最快
+# 只包含聊天、工作流、内存管理等基础功能
+#
+# 完整安装请使用: pip install "aigility[all]"
+# 或使用: pip install -r requirements-full.txt
+# ============================================================
+
+# HTTP 客户端
+httpx>=0.24.0
+httpx-sse>=0.4.0
+
+# 数据验证
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# 类型支持
+typing-extensions>=4.0.0
+
+# LangChain 核心
+langchain-core>=0.1.0
+
+# LangGraph (工作流引擎)
+langgraph>=0.0.20
+
+# LLM 提供商
+langchain-openai>=0.0.5
+
+# YAML 配置解析
+pyyaml>=6.0

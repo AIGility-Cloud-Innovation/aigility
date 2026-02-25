@@ -20,28 +20,31 @@ class ChatFlowState(TypedDict):
     """
     # 历史消息，用于保持对话上下文
     messages: Annotated[List[AnyMessage], add_messages]
-    
+
     # CoT 思考过程，用于记录 Agent 的决策和推理
     thought: Optional[str]
-    
+
     # Agent 决定调用的工具列表
     tool_calls: List[ToolCall]
-    
+
     # 工具执行结果列表
     tool_results: List[ToolResult]
-    
+
     # 最终回复建议（用于生成回复建议接口）
     reply_suggestion: Optional[str]
-    
+
     # 会话标题建议（用于生成会话标题接口）
     session_title_suggestion: Optional[str]
 
     # 临时字段，用于在节点间传递 chain 和 prompt
     chain: Optional[Any]
     prompt_input: Optional[Dict[str, Any]]
-    
+
     # 流式响应就绪标志
     streaming_ready: Optional[bool]
+
+    # RAG 使用模式: "auto", "on", "off"
+    rag_used: Optional[str]
 
 # --- 3. 核心工具定义（模拟） ---
 # 实际应用中，这些会是真实的 RAG 和 Web Search 函数

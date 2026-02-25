@@ -83,8 +83,11 @@ class TimeMRAGClient:
             payload = {
                 "kb_id": kb_id,
                 "query": query,
-
             }
+
+            # 添加调试日志
+            import logging
+            logger = logging.getLogger(__name__)
 
             response = await self.http_client.request(
                 method="POST",
@@ -92,9 +95,24 @@ class TimeMRAGClient:
                 data=payload
             )
 
+            # 调试：打印原始响应以便排查问题
+            logger.debug(f"TimeM RAG API 响应: {response}")
+
             # 解析响应（根据服务端 SearchResponse 格式）
             # 服务端返回格式: {"code": 200, "message": "success", "data": {"results": [...], "total_results": N}}
-            if response.get("code") == 200 and response.get("message") == "success":
+            # 兼容 code 为字符串或整数的情况
+            code = response.get("code")
+            message = response.get("message", "")
+
+            # 详细调试日志（使用 warning 确保能看到）
+            logger.warning(f"[TimeM RAG] 原始响应: code={code}(type:{type(code).__name__}), message='{message}'")
+
+            # 检查是否成功（兼容字符串和整数形式的 code）
+            is_success = (code == 200 or code == "200") and message == "success"
+
+            logger.warning(f"[TimeM RAG] is_success={is_success}, 条件判断: code==200:{code==200}, code=='200':{code=='200'}, message=='success':{message=='success'}")
+
+            if is_success:
                 data = response.get("data", {})
                 results = data.get("results", [])
                 total_results = data.get("total_results", 0)
@@ -126,7 +144,8 @@ class TimeMRAGClient:
 
                 return "\n\n".join(formatted_results)
             else:
-                return f"搜索失败: {response.get('message', '未知错误')}"
+                # 提供更详细的错误信息，便于调试
+                return f"搜索失败: message: {message} (code: {code})"
 
         except Exception as e:
             return f"搜索出错: {str(e)}"
