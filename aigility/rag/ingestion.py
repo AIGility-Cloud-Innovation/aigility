@@ -216,9 +216,12 @@ class IngestionManager:
             from docx.text.paragraph import Paragraph
 
             if isinstance(parent, _Cell):
+                # 对于单元格，获取其底层的XML元素
                 parent_elm = parent._tc
             else:
-                parent_elm = parent._body
+                # 对于文档主体，获取其底层XML元素
+                # 🔧 修复：在新版python-docx (1.1.2)中，_Body没有element属性，需要使用_element
+                parent_elm = parent._body._element if hasattr(parent._body, '_element') else parent._body
 
             for child in parent_elm.iterchildren():
                 if isinstance(child, CT_P):
