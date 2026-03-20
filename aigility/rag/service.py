@@ -132,30 +132,52 @@ class RAGService:
         import re
         return [w for w in re.split(r"[_ -]", base_name) if w.strip()]
 
-    def add_file(self, file_path: str):
+    def add_file(self, file_path: str) -> Dict[str, str]:
             """
             加载文件 -> 智能解析 -> 注入上下文元数据 -> 存入向量库
+
+            Args:
+                file_path: 文件路径
+
+            Returns:
+                包含文件信息的字典：
+                {
+                    "file_hash": str,     # 基于文件内容的MD5哈希（用于删除操作）
+                    "file_name": str      # 文件名（用于删除操作）
+                }
+
+            注意：
+                - 返回的 file_hash 可用于后续的 delete_document 和 restore_document 操作
+                - 相同内容的文件会有相同的 file_hash
+                - 使用 file_hash 删除时会删除所有相同内容的文件
             """
             try:
                 if not isinstance(file_path, str): raise TypeError(f"file_path must be str")
                 file_path = os.path.abspath(file_path)
                 if not os.path.exists(file_path): raise FileNotFoundError(f"文件不存在: {file_path}")
-                
+
                 doc_name = os.path.basename(file_path)
                 with open(file_path, "rb") as f:
                     file_hash = hashlib.md5(f.read()).hexdigest()
-                
-                # 检查去重逻辑... (保持不变)
+
+                # 检查去重逻辑... (基于 file_hash)
                 if hasattr(self.vector_store, "get"):
                     existing = self.vector_store.get(where={"file_hash": file_hash}, limit=1)
                     if existing and existing.get("ids"):
-                        logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name}")
-                        return
+                        logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name} (hash: {file_hash})")
+                        return {
+                            "file_hash": file_hash,
+                            "file_name": doc_name
+                        }
 
                 logging.info(f"📄 Processing file: {doc_name}")
                 chunks = self.ingestion.process_documents(file_path)
-                
-                if not chunks: return
+
+                if not chunks:
+                    return {
+                        "file_hash": file_hash,
+                        "file_name": doc_name
+                    }
 
                 # ========================================================
                 # [核心优化 1]：注入上下文缓冲 (Context Buffering)
@@ -172,6 +194,7 @@ class RAGService:
                     chunk.metadata["file_name"] = doc_name
                     chunk.metadata["chunk_index"] = i  # 记录顺序 ID，这很重要
                     chunk.metadata["total_chunks"] = total_chunks
+                    chunk.metadata["is_deleted"] = False  # 软删除标记
                     
                     # 注入前文 (Look-behind)
                     if i > 0:
@@ -192,7 +215,13 @@ class RAGService:
                 doc_meta = self._generate_meta_from_chunks(chunks, doc_name)
                 self.vector_store.add_documents(chunks)
                 logging.info(f"✅ 已添加 {len(chunks)} 个切片 (带上下文缓冲)")
-                    
+
+                # 返回文件信息，用于后续操作
+                return {
+                    "file_hash": file_hash,
+                    "file_name": doc_name
+                }
+
             except Exception as e:
                 logging.error(f"❌ Error adding file {file_path}: {str(e)}")
                 raise e
@@ -203,8 +232,8 @@ class RAGService:
             expand_context: 是否启用利用 metadata 进行上下文补全
         """
         try:
-            # 1. 基础检索
-            docs = self.vector_store.similarity_search(query, k=self.config.search_top_k)
+            # 1. 基础检索 - 添加过滤条件只检索未删除的chunk
+            docs = self._search_with_filter(query, k=self.config.search_top_k)
             if not docs: return ""
 
             # ========================================================
@@ -341,13 +370,376 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ 清空知识库失败: {str(e)}")
 
+    def _search_with_filter(self, query: str, k: int = 5) -> List:
+        """
+        带过滤条件的检索，只返回未删除的chunk
+
+        Args:
+            query: 查询文本
+            k: 返回结果数量
+
+        Returns:
+            检索结果列表
+        """
+        try:
+            # 根据不同的vector store实现使用不同的过滤方式
+            vector_store_type = self.config.vector_store.provider
+
+            if vector_store_type == "chroma":
+                # Chroma使用where参数过滤
+                docs = self.vector_store.similarity_search(
+                    query,
+                    k=k,
+                    filter={"is_deleted": {"$ne": True}}  # is_deleted != True
+                )
+            elif vector_store_type == "qdrant":
+                # Qdrant: 使用字典格式的filter
+                # LangChain 的 Qdrant adapter 接受字典格式的 filter
+                docs = self.vector_store.similarity_search(
+                    query,
+                    k=k,
+                    filter={"is_deleted": False}
+                )
+            else:
+                # 其他向量库，先检索然后手动过滤
+                all_docs = self.vector_store.similarity_search(query, k=k * 3)  # 多取一些以确保有足够结果
+                docs = [doc for doc in all_docs if doc.metadata.get("is_deleted") != True][:k]
+
+            return docs
+        except Exception as e:
+            logging.warning(f"⚠️ 过滤检索失败，降级为普通检索: {str(e)}")
+            # 降级策略：使用普通检索
+            docs = self.vector_store.similarity_search(query, k=k)
+            return [doc for doc in docs if doc.metadata.get("is_deleted") != True]
+
+    def delete_document(
+        self,
+        file_name: Optional[str] = None,
+        file_hash: Optional[str] = None
+    ) -> bool:
+        """
+        软删除文档（标记为已删除，不实际从向量库中删除）
+
+        Args:
+            file_name: 文件名（如果有多个同名文件会全部删除）
+            file_hash: 文件哈希值（基于文件内容，推荐使用）
+
+        Returns:
+            是否删除成功
+
+        注意：
+            - 推荐使用 file_hash，因为它基于内容且唯一
+            - 使用 file_name 会删除所有同名文件
+            - file_hash 是基于文件内容的MD5，相同内容的文件会有相同的hash
+        """
+        try:
+            # 至少需要一个标识符
+            if not file_name and not file_hash:
+                raise ValueError("必须提供 file_name 或 file_hash 参数")
+
+            # 构建过滤条件
+            filter_dict = {}
+            if file_hash:
+                filter_dict["file_hash"] = file_hash
+            if file_name:
+                filter_dict["file_name"] = file_name
+
+            # 更新所有匹配的chunk的metadata
+            success = self._update_chunks_metadata(
+                filter_dict=filter_dict,
+                updates={"is_deleted": True}
+            )
+
+            if success:
+                identifier = file_hash or file_name
+                logging.info(f"✅ 文档已标记为删除: {identifier}")
+
+            return success
+
+        except Exception as e:
+            logging.error(f"❌ 删除文档失败: {str(e)}")
+            return False
+
+    def restore_document(
+        self,
+        file_name: Optional[str] = None,
+        file_hash: Optional[str] = None
+    ) -> bool:
+        """
+        恢复已删除的文档
+
+        Args:
+            file_name: 文件名（如果有多个同名文件会全部恢复）
+            file_hash: 文件哈希值（基于文件内容，推荐使用）
+
+        Returns:
+            是否恢复成功
+
+        注意：
+            - 推荐使用 file_hash，因为它基于内容且唯一
+            - 使用 file_name 会恢复所有同名文件
+        """
+        try:
+            # 至少需要一个标识符
+            if not file_name and not file_hash:
+                raise ValueError("必须提供 file_name 或 file_hash 参数")
+
+            # 构建过滤条件
+            filter_dict = {}
+            if file_hash:
+                filter_dict["file_hash"] = file_hash
+            if file_name:
+                filter_dict["file_name"] = file_name
+
+            # 更新所有匹配的chunk的metadata
+            success = self._update_chunks_metadata(
+                filter_dict=filter_dict,
+                updates={"is_deleted": False}
+            )
+
+            if success:
+                identifier = file_hash or file_name
+                logging.info(f"✅ 文档已恢复: {identifier}")
+
+            return success
+
+        except Exception as e:
+            logging.error(f"❌ 恢复文档失败: {str(e)}")
+            return False
+
+    def _update_chunks_metadata(self, filter_dict: Dict, updates: Dict) -> bool:
+        """
+        更新匹配条件的chunk的metadata
+
+        Args:
+            filter_dict: 过滤条件，例如 {"file_name": "test.pdf"}
+            updates: 要更新的字段，例如 {"is_deleted": True}
+
+        Returns:
+            是否更新成功
+        """
+        try:
+            vector_store_type = self.config.vector_store.provider
+
+            if vector_store_type == "chroma":
+                # Chroma: 使用update方法
+                # 1. 先查询符合条件的文档
+                results = self.vector_store.get(where=filter_dict, limit=None)
+                if results and results.get("ids"):
+                    # 2. 更新metadata
+                    metadatas = results["metadatas"]
+                    ids = results["ids"]
+
+                    # 应用更新
+                    updated_metadatas = []
+                    for metadata in metadatas:
+                        new_metadata = metadata.copy()
+                        new_metadata.update(updates)
+                        updated_metadatas.append(new_metadata)
+
+                    # 3. 执行更新
+                    self.vector_store.update(
+                        ids=ids,
+                        metadatas=updated_metadatas
+                    )
+                    logging.info(f"✅ Chroma: 更新了 {len(ids)} 个chunk的metadata")
+                    return True
+                else:
+                    logging.warning(f"⚠️ Chroma: 未找到匹配的文档，filter={filter_dict}")
+
+            elif vector_store_type == "qdrant":
+                # Qdrant: 使用overwrite_payload方法
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+                # 获取client
+                client = self.vector_store.client
+                collection_name = self.config.vector_store.collection_name
+
+                # 构建过滤条件 - 注意：LangChain 将 metadata 存在 payload['metadata'] 中
+                must_conditions = []
+                for key, value in filter_dict.items():
+                    must_conditions.append(
+                        FieldCondition(
+                            key=f"metadata.{key}",  # 使用 metadata. 前缀访问嵌套字段
+                            match=MatchValue(value=value)
+                        )
+                    )
+
+                logging.debug(f"🔍 Qdrant scroll查询，filter={must_conditions}")
+
+                # 查询符合条件的points
+                points, _ = client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(must=must_conditions) if must_conditions else None,
+                    limit=10000,
+                    with_payload=True
+                )
+
+                logging.debug(f"🔍 Qdrant scroll找到 {len(points)} 个points")
+
+                if points:
+                    # 更新每个point的payload
+                    for point in points:
+                        # 获取现有payload并更新 metadata 字段
+                        payload = dict(point.payload) if point.payload else {}
+                        metadata = dict(payload.get("metadata", {}))
+
+                        # 应用更新
+                        metadata.update(updates)
+                        payload["metadata"] = metadata
+
+                        # 使用overwrite_payload更新
+                        client.overwrite_payload(
+                            collection_name=collection_name,
+                            payload=payload,
+                            points=[point.id]
+                        )
+
+                    logging.info(f"✅ Qdrant: 更新了 {len(points)} 个chunk的metadata")
+                    return True
+                else:
+                    logging.warning(f"⚠️ Qdrant: 未找到匹配的文档，filter={filter_dict}")
+
+            else:
+                logging.warning(f"⚠️ 不支持向量库 {vector_store_type} 的metadata更新")
+
+            return False
+
+        except Exception as e:
+            logging.error(f"❌ 更新chunk metadata失败: {str(e)}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return False
+
+    def get_deleted_documents(self) -> List[str]:
+        """
+        获取所有已删除的文档列表
+
+        Returns:
+            已删除文档的file_name列表
+        """
+        try:
+            deleted_docs = set()
+
+            # 根据不同的向量库实现不同的查询方式
+            vector_store_type = self.config.vector_store.provider
+
+            if vector_store_type == "chroma":
+                # Chroma: 使用where参数查询
+                results = self.vector_store.get(
+                    where={"is_deleted": True},
+                    limit=None
+                )
+                if results and results.get("metadatas"):
+                    for metadata in results["metadatas"]:
+                        file_name = metadata.get("file_name")
+                        if file_name:
+                            deleted_docs.add(file_name)
+
+            elif vector_store_type == "qdrant":
+                # Qdrant: 使用filter查询
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+                client = self.vector_store.client
+                collection_name = self.config.vector_store.collection_name
+
+                # 注意：LangChain 将 metadata 存在 payload['metadata'] 中
+                points, _ = client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="metadata.is_deleted",  # 使用 metadata. 前缀
+                                match=MatchValue(value=True)
+                            )
+                        ]
+                    ),
+                    limit=10000,
+                    with_payload=True
+                )
+
+                for point in points:
+                    metadata = self._get_qdrant_metadata(point.payload)
+                    file_name = metadata.get("file_name")
+                    if file_name:
+                        deleted_docs.add(file_name)
+
+            return list(deleted_docs)
+
+        except Exception as e:
+            logging.error(f"❌ 获取已删除文档列表失败: {str(e)}")
+            return []
+
     def get_global_keywords(self) -> List[str]:
         return self.global_doc_keywords
 
     def get_all_doc_meta(self) -> Dict[str, dict]:
         return self.doc_meta_info
 
-__all__ = ["RAGService"]
+    def _get_qdrant_metadata(self, payload: dict) -> dict:
+        """
+        从 Qdrant payload 中提取 metadata
+        LangChain 将 metadata 存储在 payload['metadata'] 中
+        """
+        if not payload:
+            return {}
+
+        # LangChain 的 Qdrant adapter 将 metadata 存储在嵌套的 'metadata' 字段中
+        return payload.get("metadata", {})
+
+    def debug_list_all_documents(self) -> List[Dict]:
+        """
+        [调试方法] 列出向量库中的所有文档及其metadata
+
+        Returns:
+            文档信息列表，每个元素包含 file_name, file_hash, is_deleted 等信息
+        """
+        try:
+            vector_store_type = self.config.vector_store.provider
+            documents = []
+
+            if vector_store_type == "chroma":
+                # Chroma: 获取所有文档
+                results = self.vector_store.get(limit=None)
+                if results and results.get("metadatas"):
+                    for metadata in results["metadatas"]:
+                        documents.append({
+                            "file_name": metadata.get("file_name"),
+                            "file_hash": metadata.get("file_hash"),
+                            "is_deleted": metadata.get("is_deleted"),
+                            "chunk_index": metadata.get("chunk_index")
+                        })
+
+            elif vector_store_type == "qdrant":
+                # Qdrant: 获取所有文档
+                client = self.vector_store.client
+                collection_name = self.config.vector_store.collection_name
+
+                # 获取集合中的所有点
+                points, _ = client.scroll(
+                    collection_name=collection_name,
+                    limit=10000,
+                    with_payload=True
+                )
+
+                for point in points:
+                    metadata = self._get_qdrant_metadata(point.payload)
+                    documents.append({
+                        "file_name": metadata.get("file_name"),
+                        "file_hash": metadata.get("file_hash"),
+                        "is_deleted": metadata.get("is_deleted"),
+                        "chunk_index": metadata.get("chunk_index")
+                    })
+
+            return documents
+
+        except Exception as e:
+            logging.error(f"❌ 调试：列出所有文档失败: {str(e)}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return []
+
+__all__ = ["RAGService", "delete_document", "restore_document"]
 
 
 # ====================== 测试代码 ======================
