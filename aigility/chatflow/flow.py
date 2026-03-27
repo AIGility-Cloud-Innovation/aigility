@@ -129,6 +129,24 @@ class ChatFlow:
         history = "\n".join([f"{m.type.capitalize()}: {m.content}" for m in state["messages"][:-1]])
         user_input = state["messages"][-1].content
 
+        # ✅ 智能提取 RAG 检索关键词（支持特殊标记格式）
+        # 如果 user_input 包含特殊标记，提取标记内的内容优先作为 RAG query
+        extracted_rag_query = None
+        import re
+        # 格式1: 【用于检索的关键词】{content}
+        match1 = re.search(r'【用于检索的关键词】\s*(.*?)(?:\n【|【|$)', user_input, re.DOTALL)
+        # 格式2: 【RAG_QUERY】{content}【/RAG_QUERY】
+        match2 = re.search(r'【RAG_QUERY】(.*?)【/RAG_QUERY】', user_input, re.DOTALL)
+
+        if match1:
+            extracted_rag_query = match1.group(1).strip()
+            print(f"--- [ADK] 🔍 提取到RAG检索关键词（格式1）: {extracted_rag_query[:100]}... ---")
+        elif match2:
+            extracted_rag_query = match2.group(1).strip()
+            print(f"--- [ADK] 🔍 提取到RAG检索关键词（格式2）: {extracted_rag_query[:100]}... ---")
+        else:
+            print(f"--- [ADK] ℹ️ 未检测到特殊检索标记，将使用LLM决策的query ---")
+
         # 构建决策 prompt
         agent_decision_prompt = self.config.get("agent_decision_prompt", "")
         tool_descriptions = get_tool_descriptions()
@@ -215,11 +233,17 @@ class ChatFlow:
                 # 格式: [{'tool_name': 'TimeMRAGTool', 'query': '...'}]
                 for tc in parsed:
                     if isinstance(tc, dict) and 'tool_name' in tc and 'query' in tc:
-                        # 如果是 RAG 工具，强制使用用户原始输入作为 query
+                        # 智能选择 RAG query
                         query = tc['query']
                         if tc['tool_name'] == 'TimeMRAGTool':
-                            query = user_input
-                            print(f"--- [ADK] 🔧 强制使用用户输入作为 RAG query: {user_input[:50]}... ---")
+                            if extracted_rag_query:
+                                # 优先使用提取的关键词
+                                query = extracted_rag_query
+                                print(f"--- [ADK] 🔧 使用提取的关键词作为 RAG query: {query[:100]}... ---")
+                            else:
+                                # 使用 LLM 决定的 query
+                                query = tc['query']
+                                print(f"--- [ADK] 🔧 使用LLM决策的query作为 RAG query: {query[:100]}... ---")
                         tool_calls.append(ToolCall(
                             tool_name=tc['tool_name'],
                             query=query
@@ -231,11 +255,17 @@ class ChatFlow:
                     # 标准格式: {"thought": "...", "tool_calls": [...]}
                     thought = parsed.get('thought', '思考过程未生成')
                     for tc in parsed.get('tool_calls', []):
-                        # 如果是 RAG 工具，强制使用用户原始输入作为 query
+                        # 智能选择 RAG query
                         query = tc['query']
                         if tc['tool_name'] == 'TimeMRAGTool':
-                            query = user_input
-                            print(f"--- [ADK] 🔧 强制使用用户输入作为 RAG query: {user_input[:50]}... ---")
+                            if extracted_rag_query:
+                                # 优先使用提取的关键词
+                                query = extracted_rag_query
+                                print(f"--- [ADK] 🔧 使用提取的关键词作为 RAG query: {query[:100]}... ---")
+                            else:
+                                # 使用 LLM 决定的 query
+                                query = tc['query']
+                                print(f"--- [ADK] 🔧 使用LLM决策的query作为 RAG query: {query[:100]}... ---")
                         tool_calls.append(ToolCall(
                             tool_name=tc['tool_name'],
                             query=query
@@ -244,8 +274,14 @@ class ChatFlow:
                     # 单个工具: {'tool_name': 'TimeMRAGTool', 'query': '...'}
                     query = parsed['query']
                     if parsed['tool_name'] == 'TimeMRAGTool':
-                        query = user_input
-                        print(f"--- [ADK] 🔧 强制使用用户输入作为 RAG query: {user_input[:50]}... ---")
+                        if extracted_rag_query:
+                            # 优先使用提取的关键词
+                            query = extracted_rag_query
+                            print(f"--- [ADK] 🔧 使用提取的关键词作为 RAG query: {query[:100]}... ---")
+                        else:
+                            # 使用 LLM 决定的 query
+                            query = parsed['query']
+                            print(f"--- [ADK] 🔧 使用LLM决策的query作为 RAG query: {query[:100]}... ---")
                     tool_calls.append(ToolCall(
                         tool_name=parsed['tool_name'],
                         query=query

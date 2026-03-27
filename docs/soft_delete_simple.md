@@ -73,6 +73,40 @@ def restore_document(
 **返回：**
 - `bool`: 是否恢复成功
 
+## 🔄 智能文件处理逻辑
+
+### 重新上传已删除文件
+
+当用户删除文件后又重新上传相同内容的文件时，RAG 服务会：
+
+1. **检测到相同的 `file_hash`**
+2. **如果文件已删除**：自动恢复文件（`is_deleted=False`）
+3. **更新文件名**：将文件名更新为新上传的文件名
+4. **不添加新 chunks**：复用现有的向量数据
+
+**示例场景**：
+```python
+# 1. 上传文件 document.pdf
+result = service.add_file("/path/to/document.pdf")
+# 返回: {"file_hash": "abc123", "file_name": "document.pdf"}
+
+# 2. 删除文件
+service.delete_document(file_hash="abc123")
+
+# 3. 重新上传相同内容但不同名的文件
+result = service.add_file("/path/to/renamed.pdf")
+# 返回: {"file_hash": "abc123", "file_name": "renamed.pdf"}
+# ✅ 旧文件已自动恢复
+# ✅ 文件名已更新为 "renamed.pdf"
+# ✅ 没有产生重复的 chunks
+```
+
+**优势**：
+- 🚀 更高效：不需要重新 embedding
+- 🧹 更整洁：不产生重复的向量数据
+- 💾 更省空间：复用现有 chunks
+- ✨ 更智能：自动处理，用户无感知
+
 ## 💡 完整使用流程
 
 ```python
@@ -228,8 +262,11 @@ CREATE TABLE files (
 
 - ✅ 相同内容的文件有相同的 `file_hash`
 - ✅ 基于 MD5，冲突概率极低（约 1/2^128）
-- ⚠️ 如果上传相同内容的文件，第二次会跳过（去重）
-- ⚠️ 删除时会删除所有相同内容的文件
+- ✅ **智能处理相同文件**：
+   - 如果文件已存在且未删除：更新文件名为新的文件名
+   - 如果文件已删除：自动恢复文件（`is_deleted=False`）并更新文件名
+   - 不会重复添加 chunks，保持向量库整洁
+- ✅ **删除后重新上传**：上传相同内容的文件会自动恢复，无需手动调用 `restore_document`
 
 ### 使用建议
 
