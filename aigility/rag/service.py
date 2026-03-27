@@ -160,11 +160,66 @@ class RAGService:
                 with open(file_path, "rb") as f:
                     file_hash = hashlib.md5(f.read()).hexdigest()
 
-                # 检查去重逻辑... (基于 file_hash)
+                # 检查是否存在相同 file_hash 的文件（包括已删除的）
+                # 如果存在，恢复并更新元数据；否则添加新文件
+                existing_with_same_hash = None
                 if hasattr(self.vector_store, "get"):
-                    existing = self.vector_store.get(where={"file_hash": file_hash}, limit=1)
-                    if existing and existing.get("ids"):
-                        logging.info(f"⚠️ 文件已存在，跳过添加: {doc_name} (hash: {file_hash})")
+                    vector_store_type = self.config.vector_store.provider
+
+                    if vector_store_type == "chroma":
+                        # Chroma: 查找所有相同 file_hash 的文件
+                        existing_with_same_hash = self.vector_store.get(
+                            where={"file_hash": file_hash},
+                            limit=1
+                        )
+                    elif vector_store_type == "qdrant":
+                        # Qdrant: 查找所有相同 file_hash 的文件
+                        existing_with_same_hash = self.vector_store.get(
+                            where={"metadata.file_hash": file_hash},
+                            limit=1
+                        )
+                    else:
+                        # 其他向量库
+                        existing_with_same_hash = self.vector_store.get(
+                            where={"file_hash": file_hash},
+                            limit=1
+                        )
+
+                # 如果找到相同 file_hash 的文件（无论是否已删除）
+                if existing_with_same_hash and existing_with_same_hash.get("ids"):
+                    # 检查文件是否已删除
+                    is_deleted = False
+                    if existing_with_same_hash.get("metadatas"):
+                        first_metadata = existing_with_same_hash["metadatas"][0]
+                        # 对于 Qdrant，元数据可能嵌套在 payload 中
+                        if isinstance(first_metadata, dict):
+                            is_deleted = first_metadata.get("is_deleted", False)
+
+                    if is_deleted:
+                        # 文件已删除：恢复文件并更新文件名
+                        logging.info(f"♻️ 检测到相同内容的已删除文件，恢复中: {doc_name} (hash: {file_hash})")
+                        success = self.restore_document(file_hash=file_hash)
+
+                        if success:
+                            # 更新文件名为新上传的文件名
+                            logging.info(f"📝 更新文件名: {doc_name}")
+                            self._update_chunks_metadata(
+                                file_hash=file_hash,
+                                metadata_update={"file_name": doc_name}
+                            )
+                            return {
+                                "file_hash": file_hash,
+                                "file_name": doc_name
+                            }
+                        else:
+                            logging.warning(f"⚠️ 恢复文件失败，将作为新文件添加: {doc_name}")
+                    else:
+                        # 文件未删除：仅更新文件名（如果不同）
+                        logging.info(f"✅ 文件已存在且未被删除，更新文件名: {doc_name} (hash: {file_hash})")
+                        self._update_chunks_metadata(
+                            file_hash=file_hash,
+                            metadata_update={"file_name": doc_name}
+                        )
                         return {
                             "file_hash": file_hash,
                             "file_name": doc_name
