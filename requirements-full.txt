@@ -115,3 +115,4 @@ xxhash==3.6.0
 yarl==1.22.0
 zai-sdk==0.2.1
 zstandard==0.25.0
+rank_bm25

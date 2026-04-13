@@ -7,6 +7,7 @@ import shutil
 import hashlib
 import logging
 from typing import Any, Optional, Dict, List
+from collections import defaultdict
 
 # 加载 .env 文件
 try:
@@ -45,6 +46,13 @@ try:
 except ImportError:
     HAS_NLP_DEPS = False
 
+# BM25 依赖（可选）
+try:
+    from rank_bm25 import BM25Okapi
+    HAS_RANK_BM25 = True
+except ImportError:
+    HAS_RANK_BM25 = False
+
 
 class RAGService:
     """RAG 服务主类，提供文档入库和检索能力"""
@@ -70,10 +78,16 @@ class RAGService:
         
         # 3. 初始化数据处理模块 (核心解析逻辑在此)
         self.ingestion = IngestionManager(self.config.ingestion)
-        
+
         # 4. 文档元信息存储 (内存缓存，生产环境建议持久化到 SQLite/MySQL)
         self.doc_meta_info: Dict[str, dict] = {}
         self.global_doc_keywords: List[str] = []
+
+        # 5. BM25 混合检索（延迟初始化）
+        self._bm25_corpus = []  # BM25 语料库
+        self._bm25_doc_mapping = {}  # 文档映射
+        self._bm25_index = None  # BM25 索引
+        self._bm25_built = False  # 索引是否已构建
 
     def _generate_meta_from_chunks(self, chunks: List, doc_name: str) -> dict:
         """
@@ -132,6 +146,81 @@ class RAGService:
         import re
         return [w for w in re.split(r"[_ -]", base_name) if w.strip()]
 
+    def _boost_keyword_matches(self, query: str, docs: List, top_k: int) -> List:
+        """
+        关键词增强：提升包含精确关键词的文档的排名
+
+        Args:
+            query: 查询文本
+            docs: 候选文档列表
+            top_k: 返回数量
+
+        Returns:
+            重新排序后的文档列表
+        """
+        import re
+
+        # 提取查询中的关键词和短语
+        keywords = set()
+        phrases = []
+
+        # 分词并过滤停用词
+        for word in query.split():
+            if len(word) > 1 and word not in {'的', '了', '是', '在', '和', '与', '或', '|||'}:
+                keywords.add(word)
+
+        # 提取2-3个词的短语组合
+        words_list = [w for w in query.split() if len(w) > 1 and w not in {'的', '了', '是', '在', '和', '与', '或', '|||'}]
+        if len(words_list) >= 2:
+            # 2词短语
+            for i in range(len(words_list) - 1):
+                phrases.append(f"{words_list[i]}{words_list[i+1]}")  # 无空格
+                phrases.append(f"{words_list[i]} {words_list[i+1]}")  # 有空格
+        if len(words_list) >= 3:
+            # 3词短语
+            for i in range(len(words_list) - 2):
+                phrases.append(f"{words_list[i]}{words_list[i+1]}{words_list[i+2]}")
+                phrases.append(f"{words_list[i]} {words_list[i+1]} {words_list[i+2]}")
+
+        if not keywords and not phrases:
+            return docs[:top_k]
+
+        # 计算每个文档的关键词匹配分数
+        scored_docs = []
+        for doc in docs:
+            content = doc.page_content.lower()
+            score = 0
+
+            # 1. 完整短语匹配（最高优先级）
+            for phrase in phrases:
+                phrase_lower = phrase.lower()
+                if phrase_lower in content:
+                    score += 200  # 短语匹配给高分
+
+            # 2. 关键词匹配
+            for kw in keywords:
+                kw_lower = kw.lower()
+                if kw_lower in content:
+                    # 关键词出现次数
+                    count = content.count(kw_lower)
+                    score += count * 50  # 每次出现加50分
+
+                    # 如果是完整词匹配（前后有边界），额外加分
+                    if re.search(r'\b' + re.escape(kw_lower) + r'\b', content):
+                        score += 30
+
+            # 保存分数
+            if score > 0:
+                scored_docs.append((doc, score))
+            else:
+                scored_docs.append((doc, 0))
+
+        # 按分数排序（分数高的在前）
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+
+        # 返回前 top_k 个文档
+        return [doc for doc, score in scored_docs[:top_k]]
+
     def add_file(self, file_path: str) -> Dict[str, str]:
             """
             加载文件 -> 智能解析 -> 注入上下文元数据 -> 存入向量库
@@ -163,19 +252,48 @@ class RAGService:
                 # 检查是否存在相同 file_hash 的文件（包括已删除的）
                 # 如果存在，恢复并更新元数据；否则添加新文件
                 existing_with_same_hash = None
-                if hasattr(self.vector_store, "get"):
+
+                # 使用Qdrant client直接查询（更可靠）
+                if self.config.vector_store.provider == "qdrant":
+                    try:
+                        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+                        client = self.vector_store.client
+                        collection_name = self.vector_store.collection_name
+
+                        points, _ = client.scroll(
+                            collection_name=collection_name,
+                            scroll_filter=Filter(
+                                must=[
+                                    FieldCondition(
+                                        key="metadata.file_hash",
+                                        match=MatchValue(value=file_hash)
+                                    )
+                                ]
+                            ),
+                            limit=1,
+                            with_payload=True
+                        )
+
+                        if points:
+                            # 转换为get方法返回的格式
+                            existing_with_same_hash = {
+                                "ids": [p.id for p in points],
+                                "metadatas": [p.payload.get("metadata", {}) for p in points]
+                            }
+                            logging.info(f"🔍 检测到相同file_hash的文件: {file_hash}")
+
+                    except Exception as e:
+                        logging.warning(f"⚠️ 查询file_hash失败: {e}，使用原有方法")
+
+                # 如果不是Qdrant或查询失败，使用原有方法
+                if not existing_with_same_hash and hasattr(self.vector_store, "get"):
                     vector_store_type = self.config.vector_store.provider
 
                     if vector_store_type == "chroma":
                         # Chroma: 查找所有相同 file_hash 的文件
                         existing_with_same_hash = self.vector_store.get(
                             where={"file_hash": file_hash},
-                            limit=1
-                        )
-                    elif vector_store_type == "qdrant":
-                        # Qdrant: 查找所有相同 file_hash 的文件
-                        existing_with_same_hash = self.vector_store.get(
-                            where={"metadata.file_hash": file_hash},
                             limit=1
                         )
                     else:
@@ -197,16 +315,21 @@ class RAGService:
 
                     if is_deleted:
                         # 文件已删除：恢复文件并更新文件名
-                        logging.info(f"♻️ 检测到相同内容的已删除文件，恢复中: {doc_name} (hash: {file_hash})")
+                        logging.info(f"♻️ 检测到相同内容的已删除文件，恢复中: {doc_name} (hash: {file_hash[:16]}...)")
                         success = self.restore_document(file_hash=file_hash)
 
                         if success:
                             # 更新文件名为新上传的文件名
                             logging.info(f"📝 更新文件名: {doc_name}")
-                            self._update_chunks_metadata(
-                                file_hash=file_hash,
-                                metadata_update={"file_name": doc_name}
-                            )
+                            try:
+                                self._update_chunks_metadata(
+                                    file_hash=file_hash,
+                                    metadata_update={"file_name": doc_name}
+                                )
+                            except Exception as e:
+                                logging.warning(f"⚠️ 更新文件名失败: {e}")
+
+                            logging.info(f"✅ 文件恢复成功，跳过重复添加")
                             return {
                                 "file_hash": file_hash,
                                 "file_name": doc_name
@@ -215,11 +338,8 @@ class RAGService:
                             logging.warning(f"⚠️ 恢复文件失败，将作为新文件添加: {doc_name}")
                     else:
                         # 文件未删除：仅更新文件名（如果不同）
-                        logging.info(f"✅ 文件已存在且未被删除，更新文件名: {doc_name} (hash: {file_hash})")
-                        self._update_chunks_metadata(
-                            file_hash=file_hash,
-                            metadata_update={"file_name": doc_name}
-                        )
+                        logging.info(f"✅ 文件已存在且未被删除: {doc_name} (hash: {file_hash[:16]}...)")
+                        logging.info(f"ℹ️  跳过重复添加， chunks已存在于数据库中")
                         return {
                             "file_hash": file_hash,
                             "file_name": doc_name
@@ -280,17 +400,24 @@ class RAGService:
             except Exception as e:
                 logging.error(f"❌ Error adding file {file_path}: {str(e)}")
                 raise e
-    def search(self, query: str, expand_context: bool = True) -> str:
+    def search(self, query: str, expand_context: bool = True, enable_keyword_boost: bool = True) -> str:
         """
         检索并融合上下文
         Args:
             expand_context: 是否启用利用 metadata 进行上下文补全
+            enable_keyword_boost: 是否启用关键词增强（优先提升包含精确关键词的chunk）
         """
         docs: List[Any] = []
         try:
-            # 1. 基础检索 - 添加过滤条件只检索未删除的chunk
-            docs = self._search_with_filter(query, k=self.config.search_top_k)
+            # 1. 基础检索 - 多取一些结果用于关键词增强
+            retrieve_k = self.config.search_top_k * 3 if enable_keyword_boost else self.config.search_top_k
+            docs = self._search_with_filter(query, k=retrieve_k)
             if not docs: return ""
+
+            # 2. 关键词增强（如果启用）
+            if enable_keyword_boost:
+                docs = self._boost_keyword_matches(query, docs, self.config.search_top_k)
+                if not docs: return ""
 
             # ========================================================
             # [核心优化 2]：智能结果融合 (Smart Result Merging)
@@ -797,112 +924,422 @@ class RAGService:
             logging.error(traceback.format_exc())
             return []
 
+    # ========================================================
+    # BM25 混合检索功能
+    # ========================================================
+
+    def build_bm25_index(self, force_rebuild: bool = False):
+        """
+        构建 BM25 索引
+
+        Args:
+            force_rebuild: 是否强制重建索引（默认False，只在未构建时构建）
+
+        注意：
+            - 首次使用BM25检索前必须调用此方法
+            - 添加/删除文档后建议重新构建索引
+            - 索引构建过程可能需要几秒钟（取决于文档数量）
+        """
+        if self._bm25_built and not force_rebuild:
+            logging.info("✅ BM25索引已存在，跳过构建（使用 force_rebuild=True 强制重建）")
+            return
+
+        try:
+            import math
+            import hashlib
+            from collections import defaultdict
+
+            logging.info("📦 开始构建BM25索引...")
+
+            # 从向量库获取所有文档
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+            client = self.vector_store.client
+            collection_name = self.vector_store.collection_name
+
+            points, _ = client.scroll(
+                collection_name=collection_name,
+                limit=10000,
+                with_payload=True
+            )
+
+            if not points:
+                logging.warning("⚠️ 没有文档可用于构建BM25索引")
+                return
+
+            # 构建语料库
+            self._bm25_corpus = []
+            self._bm25_doc_mapping = {}
+
+            for point in points:
+                payload = point.payload
+                metadata = payload.get('metadata', {})
+
+                # 过滤已删除的文档
+                if metadata.get('is_deleted', False):
+                    continue
+
+                content = payload.get('page_content', '')
+                tokens = self._tokenize_for_bm25(content)
+
+                # 使用索引号作为ID（简单可靠）
+                doc_idx = len(self._bm25_corpus)
+
+                self._bm25_corpus.append(tokens)
+                self._bm25_doc_mapping[doc_idx] = {
+                    'content': content,
+                    'metadata': metadata,
+                    'point_id': point.id
+                }
+
+            # 构建 BM25 索引
+            if HAS_RANK_BM25:
+                self._bm25_index = BM25Okapi(self._bm25_corpus, k1=1.5, b=0.75, epsilon=0.25)
+                logging.info(f"✅ BM25索引构建完成 (使用 rank_bm25 库)")
+            else:
+                # 使用自定义BM25实现
+                self._bm25_index = self._CustomBM25(self._bm25_corpus, k1=1.5, b=0.75)
+                logging.info(f"✅ BM25索引构建完成 (使用自定义实现)")
+
+            logging.info(f"   索引文档数: {len(self._bm25_corpus)}")
+            avg_len = sum(len(doc) for doc in self._bm25_corpus) / len(self._bm25_corpus) if self._bm25_corpus else 0
+            logging.info(f"   平均文档长度: {avg_len:.2f} 词")
+
+            self._bm25_built = True
+
+        except Exception as e:
+            logging.error(f"❌ 构建BM25索引失败: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+
+    def _tokenize_for_bm25(self, text: str) -> List[str]:
+        """
+        为BM25分词
+
+        Args:
+            text: 输入文本
+
+        Returns:
+            分词结果列表
+        """
+        # 使用jieba分词（如果可用）
+        if HAS_NLP_DEPS:
+            words = jieba.lcut(text)
+            # 过滤停用词和单字
+            stopwords = {'的', '了', '是', '在', '和', '与', '或', '|||', '、', '，', '。', '（', '）', '(', ')', '[', ']'}
+            return [w for w in words if len(w) > 1 and w not in stopwords]
+        else:
+            # 简单的空格和符号分词
+            import re
+            words = re.findall(r'[\w]+', text)
+            return [w for w in words if len(w) > 1]
+
+    def _bm25_search(self, query: str, top_k: int = 5) -> List:
+        """
+        BM25 关键词检索
+
+        Args:
+            query: 查询文本
+            top_k: 返回数量
+
+        Returns:
+            [(doc, score), ...] 检索结果列表
+        """
+        if not self._bm25_built:
+            logging.warning("⚠️ BM25索引未构建，请先调用 build_bm25_index()")
+            return []
+
+        try:
+            # 查询分词
+            query_tokens = self._tokenize_for_bm25(query)
+
+            if not query_tokens:
+                return []
+
+            # BM25检索
+            scores = self._bm25_index.get_scores(query_tokens)
+
+            # 排序并获取top_k
+            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+
+            # 转换为文档对象
+            from langchain_core.documents import Document
+            results = []
+            for idx in top_indices:
+                if scores[idx] > 0:  # 只返回有分数的文档
+                    doc_info = self._bm25_doc_mapping.get(idx)
+
+                    if doc_info:
+                        doc = Document(
+                            page_content=doc_info['content'],
+                            metadata=doc_info['metadata']
+                        )
+                        results.append((doc, scores[idx]))
+
+            return results
+
+        except Exception as e:
+            logging.error(f"❌ BM25检索失败: {e}")
+            return []
+
+    def search_bm25_hybrid(
+        self,
+        query: str,
+        semantic_weight: float = 0.5,
+        bm25_weight: float = 0.5,
+        expand_context: bool = True
+    ) -> str:
+        """
+        BM25混合检索：结合语义检索和关键词检索
+
+        这是推荐的生产环境检索方法，结合了：
+        - 语义检索：理解查询意图，找到语义相关的内容
+        - BM25检索：精确关键词匹配，确保关键信息不遗漏
+
+        Args:
+            query: 查询文本
+            semantic_weight: 语义检索权重（0-1，默认0.5）
+            bm25_weight: BM25检索权重（0-1，默认0.5）
+            expand_context: 是否扩展上下文（默认True）
+
+        Returns:
+            检索结果字符串
+
+        使用示例：
+            >>> service.build_bm25_index()  # 首次使用前构建索引
+            >>> result = service.search_bm25_hybrid("目标市场")
+            >>> # 对于精确查询，可以增加BM25权重
+            >>> result = service.search_bm25_hybrid("目标市场", bm25_weight=0.7)
+        """
+        try:
+            # 确保BM25索引已构建
+            if not self._bm25_built:
+                logging.info("📦 BM25索引未构建，自动构建中...")
+                self.build_bm25_index()
+
+            # 1. 语义检索
+            semantic_docs = self._search_with_filter(query, k=self.config.search_top_k * 3)
+            if not semantic_docs:
+                return ""
+
+            # 2. BM25检索
+            bm25_results = self._bm25_search(query, top_k=self.config.search_top_k * 3)
+            if not bm25_results:
+                # BM25无结果，降级到纯语义检索
+                logging.warning("⚠️ BM25检索无结果，使用纯语义检索")
+                return self._format_search_results(semantic_docs, expand_context)
+
+            # 3. RRF (Reciprocal Rank Fusion) 融合
+            import hashlib
+            from collections import defaultdict
+
+            def get_doc_id(doc):
+                return hashlib.md5(doc.page_content.encode()).hexdigest()
+
+            doc_scores = defaultdict(float)
+
+            # 语义检索得分
+            for rank, doc in enumerate(semantic_docs):
+                doc_id = get_doc_id(doc)
+                doc_scores[doc_id] += semantic_weight / (1 + rank)
+
+            # BM25检索得分
+            for rank, (doc, score) in enumerate(bm25_results):
+                doc_id = get_doc_id(doc)
+                doc_scores[doc_id] += bm25_weight / (1 + rank)
+
+            # 按得分排序
+            all_docs_dict = {}
+            for doc in semantic_docs:
+                doc_id = get_doc_id(doc)
+                all_docs_dict[doc_id] = doc
+            for doc, _ in bm25_results:
+                doc_id = get_doc_id(doc)
+                all_docs_dict[doc_id] = doc
+
+            sorted_doc_ids = sorted(doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True)
+
+            # 取前top_k个文档
+            final_docs = [all_docs_dict[doc_id] for doc_id in sorted_doc_ids[:self.config.search_top_k]]
+
+            return self._format_search_results(final_docs, expand_context)
+
+        except Exception as e:
+            logging.error(f"❌ BM25混合检索失败: {e}")
+            # 降级到原有检索方法
+            return self.search(query, expand_context=expand_context)
+
+    def _format_search_results(self, docs: List, expand_context: bool) -> str:
+        """
+        格式化检索结果（提取为独立方法以便复用）
+
+        Args:
+            docs: 文档列表
+            expand_context: 是否扩展上下文
+
+        Returns:
+            格式化后的结果字符串
+        """
+        if not docs:
+            return ""
+
+        # 按 (file_hash, chunk_index) 分组排序
+        grouped_docs = {}
+        for doc in docs:
+            f_hash = doc.metadata.get("file_hash", "unknown")
+            if f_hash not in grouped_docs:
+                grouped_docs[f_hash] = []
+            grouped_docs[f_hash].append(doc)
+
+        final_results = []
+
+        for f_hash, group in grouped_docs.items():
+            group.sort(key=lambda x: x.metadata.get("chunk_index", 0))
+
+            merged_texts = []
+            current_block = []
+            last_index = -999
+
+            for doc in group:
+                current_index = doc.metadata.get("chunk_index", 0)
+                content = doc.page_content.strip()
+
+                if current_index == last_index + 1:
+                    current_block.append(content)
+                else:
+                    if current_block:
+                        merged_texts.append(current_block)
+                    current_block = [content]
+
+                if expand_context and doc.metadata.get("prev_buffer"):
+                    pass
+
+                is_last_in_group = (doc == group[-1])
+                next_is_missing = True
+                if not is_last_in_group:
+                    next_doc_index = group[group.index(doc) + 1].metadata.get("chunk_index", 0)
+                    if next_doc_index == current_index + 1:
+                        next_is_missing = False
+
+                if expand_context and next_is_missing and doc.metadata.get("next_buffer"):
+                    buffer_text = doc.metadata["next_buffer"]
+                    current_block.append(f" [>>接下文: {buffer_text}...] ")
+
+                last_index = current_index
+
+            if current_block:
+                merged_texts.append(current_block)
+
+            source_name = group[0].metadata.get("file_name", "Unknown")
+            for i, block in enumerate(merged_texts):
+                full_text = "".join(block)
+                full_text = full_text.replace("...]  [>>接下文:", "")
+
+                result_item = (
+                    f"--- [引用] 来源: {source_name} (片段 {i+1}) ---\n"
+                    f"{full_text}\n"
+                )
+                final_results.append(result_item)
+
+        return "\n".join(final_results)
+
+    # ========================================================
+    # 内部类：自定义BM25实现（当rank_bm25不可用时）
+    # ========================================================
+
+    class _CustomBM25:
+        """
+        自定义BM25实现（当rank_bm25库不可用时）
+
+        BM25公式:
+        score(D,Q) = Σ IDF(qi) * (f(qi,D) * (k1 + 1)) / (f(qi,D) + k1 * (1 - b + b * |D| / avgdl))
+        """
+
+        def __init__(self, corpus: List[List[str]], k1: float = 1.5, b: float = 0.75, epsilon: float = 0.25):
+            """
+            初始化自定义BM25
+
+            Args:
+                corpus: 分词后的文档语料库
+                k1: 词频饱和参数
+                b: 长度归一化参数
+                epsilon: IDF平滑参数
+            """
+            self.k1 = k1
+            self.b = b
+            self.epsilon = epsilon
+            self.corpus = corpus
+
+            # 计算文档长度
+            self.doc_lens = [len(doc) for doc in corpus]
+
+            # 计算平均文档长度
+            self.avgdl = sum(self.doc_lens) / len(self.doc_lens) if self.doc_lens else 0
+
+            # 初始化TF、DF、IDF
+            self.tf = []  # 每个文档的词频字典
+            self.df = defaultdict(int)  # 文档频率
+
+            self._initialize()
+
+        def _initialize(self):
+            """初始化TF、DF、IDF"""
+            for doc in self.corpus:
+                # 计算每个文档的词频
+                tf_dict = defaultdict(int)
+                for word in doc:
+                    tf_dict[word] += 1
+
+                self.tf.append(tf_dict)
+
+                # 更新文档频率
+                for word in tf_dict.keys():
+                    self.df[word] += 1
+
+        def get_scores(self, query: List[str]) -> List[float]:
+            """
+            计算查询对所有文档的BM25分数
+
+            Args:
+                query: 分词后的查询
+
+            Returns:
+                每个文档的分数列表
+            """
+            import math
+
+            scores = []
+
+            for i, doc in enumerate(self.corpus):
+                score = 0
+                doc_len = self.doc_lens[i]
+
+                for word in query:
+                    if word not in self.tf[i]:
+                        continue
+
+                    # 词频
+                    freq = self.tf[i][word]
+
+                    # IDF
+                    N = len(self.corpus)
+                    df = self.df.get(word, 0)
+                    idf = math.log((N - df + 0.5) / (df + 0.5) + 1.0)
+
+                    # BM25分数
+                    numerator = freq * (self.k1 + 1)
+                    denominator = freq + self.k1 * (1 - self.b + self.b * doc_len / self.avgdl)
+                    score += idf * (numerator / denominator)
+
+                scores.append(score)
+
+            return scores
+
+
 __all__ = ["RAGService", "delete_document", "restore_document"]
 
 
-# ====================== 测试代码 ======================
-if __name__ == "__main__":
-    # 导入配置类（顶部已处理路径问题）
-    try:
-        from .config import EmbeddingConfig, VectorStoreConfig
-    except ImportError:
-        from aigility.rag.config import EmbeddingConfig, VectorStoreConfig
-    
-    # 配置日志输出到控制台
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s"
-    )
-    
-    print("=" * 60)
-    print("🧪 RAGService 功能测试")
-    print("=" * 60)
-    
-    # ----------------------
-    # 测试配置（使用本地 HuggingFace 模型 + Chroma）
-    # ----------------------
-    try:
-        from .config import IngestionConfig
-    except ImportError:
-        from aigility.rag.config import IngestionConfig
-    
-    config = RAGConfig(
-        embedding=EmbeddingConfig(
-            provider="zhipuai",
-            model_name="embedding-3",
-            api_key=os.getenv("ZHIPUAI_API_KEY", "")
-        ),
-        vector_store=VectorStoreConfig(
-            provider="qdrant",
-            collection_name="adp_knowledge_base",
-            url="http://localhost:6333" 
-        ),
-        ingestion=IngestionConfig(
-            chunk_size=500,
-            chunk_overlap=50,  # 增大 overlap，确保跨页内容有重叠
-        ),
-        search_top_k=5
-    )
-    
-    print(f"\n📋 配置信息:")
-    print(f"   - Embedding: {config.embedding.provider} / {config.embedding.model_name} / {config.embedding.api_key}")
-    print(f"   - VectorStore: {config.vector_store.provider}")
-    print(f"   - 持久化路径: {config.vector_store.get_persist_path()}")
-    print(f"   - Chunk Size: {config.ingestion.chunk_size}, Overlap: {config.ingestion.chunk_overlap}")
-    
-    # ----------------------
-    # 初始化服务
-    # ----------------------
-    print("\n📦 初始化 RAGService...")
-    try:
-        service = RAGService(config=config)
-        print("   ✅ 初始化成功！")
-    except Exception as e:
-        print(f"   ❌ 初始化失败: {e}")
-        sys.exit(1)
-    
-    # ----------------------
-    # 添加测试文件
-    # ----------------------
-    # 查找测试文件
-    test_files = ["test.pdf", "test.txt", "aigility/rag/test.pdf", "aigility/rag/test.txt",
-                  "../test.pdf", "../../test.pdf"]
-    test_file = None
-    for f in test_files:
-        if os.path.exists(f):
-            test_file = f
-            break
-    
-    if test_file:
-        print(f"\n📄 添加测试文件: {test_file}")
-        try:
-            service.add_file(test_file)
-            print("   ✅ 文件处理完成！")
-        except Exception as e:
-            print(f"   ❌ 文件处理失败: {e}")
-    else:
-        print("\n⚠️ 未找到测试文件，跳过文件添加步骤")
-        print("   请在当前目录放置 test.pdf 或 test.txt 文件")
-    
-    # ----------------------
-    # 查看文档元信息
-    # ----------------------
-    print("\n📊 文档元信息:")
-    all_meta = service.get_all_doc_meta()
-    if all_meta:
-        for doc_name, meta in all_meta.items():
-            print(f"   📄 {doc_name}")
-            print(f"      - 关键词: {meta.get('keywords', [])}")
-            print(f"      - 切片数: {meta.get('chunk_count', 0)}")
-            print(f"      - 摘要: {meta.get('summary', '')[:100]}...")
-    else:
-        print("   (无文档)")
-    
-    # ----------------------
-    # 测试检索
-    # ----------------------
-    print("\n🔍 测试检索功能:")
-    test_queries = [
 
         "应届生毕业后档案有哪些去处？"
     ]
