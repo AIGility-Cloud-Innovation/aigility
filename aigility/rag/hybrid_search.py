@@ -175,7 +175,14 @@ class EnhancedSearch:
             # RRF 算法：综合多个排序结果
             # 公式：score = sum(weight / (k + rank))
 
-            all_docs = list(set(semantic_results + keyword_results))
+            all_docs = []
+            merged_seen_ids = set()
+            for doc in semantic_results + keyword_results:
+                doc_id = doc.page_content[:100]
+                if doc_id in merged_seen_ids:
+                    continue
+                merged_seen_ids.add(doc_id)
+                all_docs.append(doc)
             doc_scores = defaultdict(float)
 
             # 语义检索得分
@@ -216,6 +223,7 @@ def enhanced_search_method(self, query: str, expand_context: bool = True, use_hy
     Returns:
         检索结果字符串
     """
+    docs = []
     try:
         if use_hybrid:
             # 使用混合检索
@@ -299,7 +307,9 @@ def enhanced_search_method(self, query: str, expand_context: bool = True, use_hy
     except Exception as e:
         logging.error(f"❌ Enhanced search failed: {str(e)}")
         # 降级策略
-        return "\n".join([d.page_content for d in docs])
+        if docs:
+            return "\n".join([d.page_content for d in docs])
+        return ""
 
 
 # 为方便使用，提供一个 monkey patch 函数
