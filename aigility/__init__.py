@@ -9,7 +9,7 @@ AIGility ADK - Agent Development Kit
 - memory: 记忆管理
 """
 
-__version__ = "0.0.9"
+__version__ = "0.1.0"
 __author__ = "AIGility Cloud Innovation"
 __email__ = "contact@aigility.com"
 __description__ = "Agent Development Kit - 智能体开发框架"

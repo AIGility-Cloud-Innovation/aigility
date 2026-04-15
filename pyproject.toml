@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aigility"
-version = "0.0.9"
+version = "0.1.0"
 description = "A modern Python ADK - Agent Development Kit for building AI agents with LangGraph and LangChain. This library provides a comprehensive, type-safe framework for developing intelligent agents with chat, workflow, memory, and knowledge management capabilities."
 readme = "README.md"
 requires-python = ">=3.8"
