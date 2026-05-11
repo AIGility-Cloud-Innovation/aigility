@@ -6,6 +6,7 @@
 1. PDF: 使用 pdfplumber 基于坐标还原布局，支持表格转 Markdown。
 2. Excel: 借鉴 RAGFlow 将行数据序列化为 "键:值" 格式，保留语义。
 3. Docx: 区分处理文本段落与表格，防止表格内容错乱。
+4. Markdown: 支持基于 AST 的智能切分，保持标题-内容关联性。
 """
 
 import os
@@ -23,39 +24,57 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from .config import IngestionConfig
 
+# 尝试导入 Markdown AST 切分器
+try:
+    from .markdown_splitter import MarkdownASTSplitter
+    MARKDOWN_AST_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AST_AVAILABLE = False
+
 class IngestionManager:
     """通用文档解析与切分管理器"""
-    
+
     def __init__(self, config: IngestionConfig):
         self.config = config
-        self._splitter = None
-        
-        # 扩展的分隔符，增加了 Markdown 表格行分隔符
-        self.universal_separators = [
-            r"\n#{1,6} ",          # Markdown 标题
-            r"\n\*\*\*+\n",        # 分割线
-            r"\n---+\n",           # 分割线
-            r"\n___+\n",           # 分割线
-            r"\n\n",               # 段落
-            r"\n",                 # 行
-            "。", "！", "？",      # 句末
-            "; ", "；",            # 语义分隔
-            " ", ""
-        ]
-        
+        self._fallback_splitter = None
+
         self.duplicate_cache: Dict[str, set] = {}
+
+        # 默认使用 AST 切分器（如果可用）
+        if MARKDOWN_AST_AVAILABLE:
+            self._ast_splitter = MarkdownASTSplitter(
+                chunk_size=config.chunk_size,
+                chunk_overlap=config.chunk_overlap,
+            )
+            self._use_ast = True
+            print("✅ 使用 Markdown AST 切分器（保持标题-内容关联）")
+        else:
+            self._ast_splitter = None
+            self._use_ast = False
+            print("⚠️ markdown-it-py 未安装，降级使用传统切分器")
 
     @property
     def splitter(self):
-        if self._splitter is None:
-            self._splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.config.chunk_size,
-            chunk_overlap=self.config.chunk_overlap,
-            separators=self.universal_separators,
+        """获取兜底的传统切分器"""
+        if self._fallback_splitter is None:
+            self._fallback_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap,
+                separators=[
+                    r"\n#{1,6} ",
+                    r"\n\*\*\*+\n",
+                    r"\n---+\n",
+                    r"\n___+\n",
+                    r"\n\n",
+                    r"\n",
+                    "。", "！", "？",
+                    "; ", "；",
+                    " ", ""
+                ],
                 is_separator_regex=True,
-            length_function=len
-        )
-        return self._splitter
+                length_function=len
+            )
+        return self._fallback_splitter
 
     def load_file(self, file_path: str) -> List[Document]:
         """统一入口：根据文件类型分发处理逻辑"""
@@ -118,11 +137,16 @@ class IngestionManager:
                         # 将表格转为 Markdown 格式
                         # 过滤 None 值
                         clean_table = [[str(cell or "").replace("\n", " ") for cell in row] for row in table]
-                        if clean_table:
+                        if clean_table and len(clean_table) > 1:
                             try:
-                                df = pd.DataFrame(clean_table[1:], columns=clean_table[0])
-                                md_table = df.to_markdown(index=False)
-                                table_texts.append(f"\n\n【表格数据】\n{md_table}\n\n")
+                                header = clean_table[0]
+                                data_rows = clean_table[1:]
+                                # 手动生成标准 Markdown 表格（不依赖 tabulate）
+                                header_line = "| " + " | ".join(header) + " |"
+                                separator = "| " + " | ".join(["---"] * len(header)) + " |"
+                                data_lines = ["| " + " | ".join(row) + " |" for row in data_rows]
+                                md_table = "\n".join([header_line, separator] + data_lines)
+                                table_texts.append(f"\n\n{md_table}\n\n")
                             except Exception:
                                 pass # 表格结构过于复杂，跳过
                 
@@ -248,8 +272,13 @@ class IngestionManager:
                 if rows_data:
                     try:
                         # 假设第一行是表头
-                        df = pd.DataFrame(rows_data[1:], columns=rows_data[0])
-                        md_table = df.to_markdown(index=False)
+                        header = rows_data[0]
+                        data_rows = rows_data[1:]
+                        # 手动生成标准 Markdown 表格（不依赖 tabulate）
+                        header_line = "| " + " | ".join(header) + " |"
+                        separator = "| " + " | ".join(["---"] * len(header)) + " |"
+                        data_lines = ["| " + " | ".join(row) + " |" for row in data_rows]
+                        md_table = "\n".join([header_line, separator] + data_lines)
                         full_text.append(f"\n{md_table}\n")
                     except Exception:
                         # 如果表格不规范，退化为文本拼接
@@ -289,9 +318,13 @@ class IngestionManager:
         # 3. 文本清洗 (保留 Markdown 表格结构)
         cleaned_docs = self._clean_docs_light([merged_doc])
         
-        # 4. 切分 (使用优化后的 splitter，现在 overlap 能正常跨页工作)
-        logging.info(f"🔧 Splitter 配置: chunk_size={self.config.chunk_size}, chunk_overlap={self.config.chunk_overlap}")
-        split_docs = self.splitter.split_documents(cleaned_docs)
+        # 4. 切分 (默认使用 AST 切分器，保持标题-内容关联)
+        logging.info(f"🔧 切分配置: chunk_size={self.config.chunk_size}, chunk_overlap={self.config.chunk_overlap}")
+
+        if self._use_ast:
+            split_docs = self._ast_splitter.split_documents(cleaned_docs)
+        else:
+            split_docs = self.splitter.split_documents(cleaned_docs)
         
         # 【调试】打印前几个 chunk 的首尾内容，验证 overlap
         if len(split_docs) >= 2:
@@ -316,6 +349,8 @@ class IngestionManager:
             text = doc.page_content
             # 仅移除不可见字符，保留表格符号 | -
             text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+            # 修复 Markdown 标题格式: "#标题" -> "# 标题" (确保 # 后有空格)
+            text = re.sub(r'^(#{1,6})([^\s#])', r'\1 \2', text, flags=re.MULTILINE)
             doc.page_content = text.strip()
         return docs
 

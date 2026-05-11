@@ -116,3 +116,4 @@ yarl==1.22.0
 zai-sdk==0.2.1
 zstandard==0.25.0
 rank_bm25
+markdown-it-py>=3.0.0
