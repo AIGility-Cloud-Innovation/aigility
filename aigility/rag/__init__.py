@@ -86,6 +86,7 @@ from .config import (
 )
 from .workflow import create_rag_workflow, RAGWorkflowState
 from .client import TimeMRAGClient, create_timem_rag_client
+from .ingestion import IngestionManager
 
 __all__ = [
     # 基础服务
@@ -94,6 +95,7 @@ __all__ = [
     "EmbeddingConfig",
     "VectorStoreConfig",
     "IngestionConfig",
+    "IngestionManager",
     # 工作流
     "create_rag_workflow",
     "RAGWorkflowState",
