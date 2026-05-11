@@ -30,3 +30,6 @@ langchain-openai>=0.0.5
 
 # YAML 配置解析
 pyyaml>=6.0
+rank_bm25>=0.2.0
+# Markdown AST 解析（用于智能文档切分）
+markdown-it-py>=3.0.0
