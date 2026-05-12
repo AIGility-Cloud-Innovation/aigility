@@ -45,6 +45,8 @@ class IngestionManager:
             self._ast_splitter = MarkdownASTSplitter(
                 chunk_size=config.chunk_size,
                 chunk_overlap=config.chunk_overlap,
+                context_buffer_size=config.context_buffer_size,
+                min_chunk_size=config.min_chunk_length,
             )
             self._use_ast = True
             print("✅ 使用 Markdown AST 切分器（保持标题-内容关联）")
@@ -258,7 +260,14 @@ class IngestionManager:
             if 'Paragraph' in str(type(block)):
                 text = block.text.strip()
                 if text:
-                    full_text.append(text)
+                    # 优先检测 Word 标题样式，其次基于文本模式识别标题
+                    heading_level = self._get_docx_heading_level(block)
+                    if not heading_level:
+                        heading_level = self._detect_heading_by_text(text)
+                    if heading_level:
+                        full_text.append(f"{'#' * heading_level} {text}")
+                    else:
+                        full_text.append(text)
             
             # 处理表格 [关键优化]
             elif 'Table' in str(type(block)):
@@ -286,6 +295,66 @@ class IngestionManager:
                         full_text.append(f"\n{text_table}\n")
 
         return ["\n".join(full_text)]
+
+    def _get_docx_heading_level(self, paragraph) -> Optional[int]:
+        """
+        检测 Word 段落是否为标题样式，返回标题级别
+
+        Args:
+            paragraph: python-docx 的 Paragraph 对象
+
+        Returns:
+            标题级别 (1-6)，如果不是标题则返回 None
+        """
+        try:
+            style_name = paragraph.style.name.lower() if paragraph.style else ""
+
+            # 直接匹配 "Heading 1" 到 "Heading 6" 样式
+            if "heading" in style_name:
+                match = re.search(r'heading\s*(\d)', style_name)
+                if match:
+                    return int(match.group(1))
+
+            # 检查大纲级别 (OutlineLevel)
+            pPr = paragraph._p.pPr
+            if pPr is not None:
+                outlineLvl = pPr.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}outlineLvl')
+                if outlineLvl is not None:
+                    level = int(outlineLvl.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val', '9'))
+                    if level < 9:  # 0-8 是有效标题级别
+                        return level + 1  # outlineLvl 从 0 开始，标题从 # 开始
+
+            return None
+        except Exception:
+            return None
+
+    def _detect_heading_by_text(self, text: str) -> Optional[int]:
+        """
+        基于文本模式识别标题（中英文混合文档）
+
+        Args:
+            text: 段落文本
+
+        Returns:
+            标题级别 (1-6)，如果不是标题则返回 None
+        """
+        # 中文数字标题：一、二、三... 十一、十二...
+        if re.match(r'^[一二三四五六七八九十]+[、.]', text):
+            return 1
+
+        # 数字编号标题：1.1, 7.1, 10.2, 11.2...
+        if re.match(r'^\d+\.\d+[\s\.]', text):
+            return 2
+
+        # 单层数字标题：1、2、3... 或 1. 2. 3...
+        if re.match(r'^\d+[、.]', text):
+            return 1
+
+        # 带括号的标题：（一）（二）
+        if re.match(r'^[（(][一二三四五六七八九十]+[）)]', text):
+            return 2
+
+        return None
 
     def _parse_txt(self, file_path: str) -> List[str]:
         with open(file_path, 'r', encoding='utf-8') as f:

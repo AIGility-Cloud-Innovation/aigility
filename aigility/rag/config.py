@@ -176,6 +176,7 @@ class IngestionConfig(BaseModel):
     """
     chunk_size: int = Field(default=500, description="基础 chunk 长度")
     chunk_overlap: int = Field(default=100, description="重叠长度")
+    context_buffer_size: int = Field(default=200, description="上下文扩展时前后 buffer 大小")
     min_chunk_length: int = Field(default=20, description="最小 chunk 长度")
     max_chunk_length: int = Field(default=1000, description="最大 chunk 长度")
     enable_duplicate_removal: bool = Field(default=True, description="是否去重")
