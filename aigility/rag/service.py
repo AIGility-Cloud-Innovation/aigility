@@ -1035,8 +1035,8 @@ class RAGService:
     def search_bm25_hybrid(
         self,
         query: str,
-        semantic_weight: float = 0.5,
-        bm25_weight: float = 0.5,
+        semantic_weight: float = 0.6,
+        bm25_weight: float = 0.4,
         expand_context: bool = True
     ) -> str:
         """
@@ -1162,8 +1162,10 @@ class RAGService:
                         merged_texts.append(current_block)
                     current_block = [content]
 
-                if expand_context and doc.metadata.get("prev_buffer"):
-                    pass
+                # 添加前文 buffer（当前 chunk 不是第一个，且前一个 chunk 不连续）
+                if expand_context and current_index > 0 and doc.metadata.get("prev_buffer") and current_index != last_index + 1:
+                    buffer_text = doc.metadata["prev_buffer"]
+                    current_block.insert(0, f" [...前文: {buffer_text}...] ")
 
                 is_last_in_group = (doc == group[-1])
                 next_is_missing = True
@@ -1172,6 +1174,7 @@ class RAGService:
                     if next_doc_index == current_index + 1:
                         next_is_missing = False
 
+                # 添加后文 buffer（下一个 chunk 不连续）
                 if expand_context and next_is_missing and doc.metadata.get("next_buffer"):
                     buffer_text = doc.metadata["next_buffer"]
                     current_block.append(f" [>>接下文: {buffer_text}...] ")
