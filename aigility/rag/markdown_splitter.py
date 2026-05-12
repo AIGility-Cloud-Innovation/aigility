@@ -40,6 +40,8 @@ class MarkdownASTSplitter:
         chunk_size: int = 500,
         chunk_overlap: int = 100,
         length_function: callable = len,
+        context_buffer_size: int = 100,
+        min_chunk_size: int = 100,
     ):
         """
         初始化切分器
@@ -48,10 +50,14 @@ class MarkdownASTSplitter:
             chunk_size: 目标 chunk 大小（字符数）
             chunk_overlap: chunk 之间的重叠大小
             length_function: 计算文本长度的函数
+            context_buffer_size: 上下文扩展时前后 buffer 的大小（字符数）
+            min_chunk_size: 最小 chunk 大小，避免生成太小的 chunk
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.length_function = length_function
+        self.context_buffer_size = context_buffer_size
+        self.min_chunk_size = min_chunk_size
 
         # 初始化 markdown-it 解析器，启用表格插件
         self.md = MarkdownIt().enable('table')
@@ -93,13 +99,29 @@ class MarkdownASTSplitter:
         result = []
         for doc in documents:
             chunks = self.split_text(doc.page_content)
+
+            # 计算每个 chunk 的前后 buffer
             for i, chunk in enumerate(chunks):
+                # 前 buffer: 前一个 chunk 的末尾
+                prev_buffer = ""
+                if i > 0:
+                    prev_chunk = chunks[i - 1]
+                    prev_buffer = prev_chunk[-self.context_buffer_size:]
+
+                # 后 buffer: 后一个 chunk 的开头
+                next_buffer = ""
+                if i < len(chunks) - 1:
+                    next_chunk = chunks[i + 1]
+                    next_buffer = next_chunk[:self.context_buffer_size]
+
                 result.append(Document(
                     page_content=chunk,
                     metadata={
                         **doc.metadata,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
+                        "prev_buffer": prev_buffer,
+                        "next_buffer": next_buffer,
                     }
                 ))
         return result
@@ -326,7 +348,15 @@ class MarkdownASTSplitter:
                 current_size += block_size
                 i += 1
             else:
-                # 当前 chunk 已满，保存并开始新 chunk
+                # 当前 chunk 已满
+                # 如果当前 chunk 太小，尝试和下一个 block 合并（避免小 chunk）
+                if current_size < self.min_chunk_size and i + 1 < len(blocks):
+                    current_chunk.append(block_content)
+                    current_size += block_size
+                    i += 1
+                    continue
+
+                # 保存当前 chunk
                 if current_chunk:
                     chunks.append('\n\n'.join(current_chunk))
                     # 保留 overlap
@@ -347,8 +377,8 @@ class MarkdownASTSplitter:
 
                 # 如果单个块超过 chunk_size，需要切分
                 if block_size > self.chunk_size:
-                    # 表格块不切分，保持结构完整（允许超过 chunk_size）
-                    if block['type'] == 'table':
+                    # 表格/列表块不切分，保持结构完整（允许超过 chunk_size）
+                    if block['type'] in ('table', 'list'):
                         current_chunk = [block_content]
                         current_size = block_size
                     else:

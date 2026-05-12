@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from aigility.rag import RAGService, RAGConfig, EmbeddingConfig, VectorStoreConfig
+from aigility.rag import RAGService, RAGConfig, EmbeddingConfig, VectorStoreConfig,IngestionConfig
 
 print("=" * 80)
 print("🧹 清理知识库并重新测试")
@@ -26,7 +26,11 @@ rag_config = RAGConfig(
         collection_name="adp_knowledge_base",
         url="http://localhost:6333"
     ),
-    search_top_k=5
+    search_top_k=5,
+    ingestion=IngestionConfig(
+        chunk_size=300,      
+        chunk_overlap=100,   
+    )
 )
 
 rag_service = RAGService(config=rag_config)
@@ -34,7 +38,7 @@ rag_service = RAGService(config=rag_config)
 # 1. 清空知识库
 print("\n1️⃣ 清空知识库")
 print("-" * 80)
-# rag_service.clear_knowledge_base()
+rag_service.clear_knowledge_base()
 print("✅ 知识库已清空")
 
 # 2. 添加知识库文件
@@ -50,13 +54,13 @@ print("\n3️⃣ 测试查询")
 print("-" * 80)
 
 queries = [
-    "密封材料 温度范围"
+    "电动提升机介绍"
 ]
 
 for query in queries:
     print(f"\n查询: 「{query}」")
     print("-" * 40)
-    result = rag_service.search(query, expand_context=False)
+    result = rag_service.search(query)
     if result:
         print(result)
     else:
