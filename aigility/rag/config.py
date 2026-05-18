@@ -184,14 +184,50 @@ class IngestionConfig(BaseModel):
     enable_structured_tag: bool = Field(default=True, description="是否添加结构化标签")
 
 
+class RerankConfig(BaseModel):
+    """
+    Rerank 重排序配置
+
+    Attributes:
+        enabled: 是否启用 rerank
+        provider: 模型提供商 ("dashscope")
+        model_name: 模型名称
+        api_key: API 密钥
+        top_n: rerank 后保留的文档数量（None 则使用 search_top_k）
+    """
+    enabled: bool = Field(default=False, description="是否启用 rerank")
+    provider: Literal["dashscope"] = Field(
+        default="dashscope",
+        description="Rerank 模型提供商"
+    )
+    model_name: str = Field(
+        default="qwen3-rerank",
+        description="Rerank 模型名称"
+    )
+    api_key: Optional[str] = Field(
+        default=None,
+        description="API 密钥，也可通过 DASHSCOPE_API_KEY 环境变量设置"
+    )
+    top_n: Optional[int] = Field(
+        default=None,
+        description="rerank 后保留的文档数量（None 则使用 search_top_k）"
+    )
+
+    def get_api_key(self) -> Optional[str]:
+        if self.api_key:
+            return self.api_key
+        return os.environ.get("DASHSCOPE_API_KEY")
+
+
 class RAGConfig(BaseModel):
     """
     RAG 服务总配置
-    
+
     Attributes:
         embedding: 嵌入模型配置
         vector_store: 向量库配置
         ingestion: 文档处理配置
+        rerank: Rerank 重排序配置
         search_top_k: 检索返回的文档数量
     """
     embedding: EmbeddingConfig = Field(
@@ -206,6 +242,10 @@ class RAGConfig(BaseModel):
         default_factory=IngestionConfig,
         description="文档处理配置"
     )
+    rerank: RerankConfig = Field(
+        default_factory=RerankConfig,
+        description="Rerank 重排序配置"
+    )
     search_top_k: int = Field(
         default=5,
         description="检索返回的文档数量"
@@ -215,8 +255,9 @@ class RAGConfig(BaseModel):
 __all__ = [
     "RAGConfig",
     "EmbeddingConfig",
-    "VectorStoreConfig", 
+    "VectorStoreConfig",
     "IngestionConfig",
+    "RerankConfig",
     "EmbeddingProviderType",
     "VectorStoreProviderType"
 ]

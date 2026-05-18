@@ -117,3 +117,4 @@ zai-sdk==0.2.1
 zstandard==0.25.0
 rank_bm25
 markdown-it-py>=3.0.0
+dashscope>=0.1.0
