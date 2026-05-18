@@ -26,17 +26,19 @@ try:
     from .embeddings.factory import EmbeddingFactory
     from .vector_stores.factory import VectorStoreFactory
     from .ingestion import IngestionManager
+    from .rerank.factory import RerankFactory
 except ImportError:
     # 直接运行时使用绝对导入
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     _package_dir = os.path.dirname(os.path.dirname(_current_dir))
     if _package_dir not in sys.path:
         sys.path.insert(0, _package_dir)
-    
+
     from aigility.rag.config import RAGConfig
     from aigility.rag.embeddings.factory import EmbeddingFactory
     from aigility.rag.vector_stores.factory import VectorStoreFactory
     from aigility.rag.ingestion import IngestionManager
+    from aigility.rag.rerank.factory import RerankFactory
 
 # NLP 依赖用于提取元数据 (关键词/摘要)
 try:
@@ -88,6 +90,15 @@ class RAGService:
         self._bm25_doc_mapping = {}  # 文档映射
         self._bm25_index = None  # BM25 索引
         self._bm25_built = False  # 索引是否已构建
+
+        # 6. Rerank 重排序（可选）
+        self._reranker = None
+        if self.config.rerank.enabled:
+            try:
+                self._reranker = RerankFactory.get_reranker(self.config.rerank)
+                logging.info(f"✅ Rerank 已启用: {self.config.rerank.provider}/{self.config.rerank.model_name}")
+            except Exception as e:
+                logging.warning(f"⚠️ Rerank 初始化失败，将跳过 rerank: {e}")
 
     def _generate_meta_from_chunks(self, chunks: List, doc_name: str) -> dict:
         """
@@ -1111,6 +1122,17 @@ class RAGService:
 
             # 取前top_k个文档
             final_docs = [all_docs_dict[doc_id] for doc_id in sorted_doc_ids[:self.config.search_top_k]]
+
+            # 4. Rerank 重排序（可选）
+            if self._reranker and final_docs:
+                try:
+                    top_n = self.config.rerank.top_n or self.config.search_top_k
+                    final_docs = self._reranker.rerank_documents(
+                        query, final_docs, top_n=top_n
+                    )
+                    logging.info(f"✅ Rerank 完成，保留 {len(final_docs)} 个文档")
+                except Exception as e:
+                    logging.warning(f"⚠️ Rerank 失败，使用原始排序: {e}")
 
             return self._format_search_results(final_docs, expand_context)
 

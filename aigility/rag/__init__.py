@@ -83,10 +83,12 @@ from .config import (
     EmbeddingConfig,
     VectorStoreConfig,
     IngestionConfig,
+    RerankConfig,
 )
 from .workflow import create_rag_workflow, RAGWorkflowState
 from .client import TimeMRAGClient, create_timem_rag_client
 from .ingestion import IngestionManager
+from .rerank import RerankFactory, BaseRerankAdapter
 
 __all__ = [
     # 基础服务
@@ -95,7 +97,11 @@ __all__ = [
     "EmbeddingConfig",
     "VectorStoreConfig",
     "IngestionConfig",
+    "RerankConfig",
     "IngestionManager",
+    # Rerank
+    "RerankFactory",
+    "BaseRerankAdapter",
     # 工作流
     "create_rag_workflow",
     "RAGWorkflowState",
