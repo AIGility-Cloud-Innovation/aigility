@@ -74,9 +74,20 @@ class RAGService:
         
         # 2. 初始化 Vector Store (注入 embedding)
         self.vector_store = VectorStoreFactory.get_vector_store(
-            self.config.vector_store, 
+            self.config.vector_store,
             self.embedding_model
         )
+
+        # 2.1 确保 Payload Index 已建立（仅 Qdrant）
+        if self.config.vector_store.provider == "qdrant":
+            try:
+                from .vector_stores.qdrant import QdrantAdapter
+                QdrantAdapter.ensure_payload_indexes(
+                    self.vector_store.client,
+                    self.config.vector_store
+                )
+            except Exception as e:
+                logging.warning(f"⚠️ Payload Index 初始化失败: {e}")
         
         # 3. 初始化数据处理模块 (核心解析逻辑在此)
         self.ingestion = IngestionManager(self.config.ingestion)

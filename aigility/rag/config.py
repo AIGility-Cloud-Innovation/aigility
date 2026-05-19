@@ -26,7 +26,7 @@ RAG 配置模块
 """
 
 import os
-from typing import Literal, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -99,6 +99,58 @@ class EmbeddingConfig(BaseModel):
         return default_urls.get(self.provider)
 
 
+class PayloadIndexField(BaseModel):
+    """单个 Payload Index 字段配置"""
+    field_name: str = Field(description="字段名（含 metadata. 前缀）")
+    field_type: Literal["keyword", "integer", "float", "text"] = Field(
+        default="keyword",
+        description="字段索引类型: keyword(精确匹配) / integer(范围查询) / float(范围查询) / text(全文搜索)"
+    )
+
+
+class PayloadIndexConfig(BaseModel):
+    """
+    Qdrant Payload Index 配置
+
+    为高频过滤字段建立倒排索引，加速带 filter 的检索。
+    对现有 collection 立即生效，无需重新入库。
+
+    Attributes:
+        enabled: 是否启用 payload index
+        fields: 需要建立索引的字段列表
+        auto_create: 新建 collection 时是否自动创建索引
+    """
+    enabled: bool = Field(default=True, description="是否启用 payload index")
+    fields: List[PayloadIndexField] = Field(
+        default_factory=lambda: [
+            PayloadIndexField(field_name="metadata.file_hash", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.file_type", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.chunk_index", field_type="integer"),
+            PayloadIndexField(field_name="metadata.is_deleted", field_type="keyword"),
+        ],
+        description="需要建立索引的字段列表"
+    )
+    auto_create: bool = Field(
+        default=True,
+        description="新建 collection 时是否自动创建索引"
+    )
+
+    def get_field_schema_map(self) -> dict:
+        """将配置转换为 Qdrant PayloadSchemaType 映射"""
+        from qdrant_client.models import PayloadSchemaType
+
+        type_map = {
+            "keyword": PayloadSchemaType.KEYWORD,
+            "integer": PayloadSchemaType.INTEGER,
+            "float": PayloadSchemaType.FLOAT,
+            "text": PayloadSchemaType.TEXT,
+        }
+        return {
+            f.field_name: type_map[f.field_type]
+            for f in self.fields
+        }
+
+
 class VectorStoreConfig(BaseModel):
     """
     向量库配置
@@ -134,6 +186,10 @@ class VectorStoreConfig(BaseModel):
     expected_dim: Optional[int] = Field(
         default=None,
         description="预期向量维度（用于校验）"
+    )
+    payload_index: PayloadIndexConfig = Field(
+        default_factory=PayloadIndexConfig,
+        description="Payload Index 配置，为高频过滤字段建立索引加速检索"
     )
 
     def get_persist_path(self) -> str:
@@ -258,6 +314,8 @@ __all__ = [
     "VectorStoreConfig",
     "IngestionConfig",
     "RerankConfig",
+    "PayloadIndexConfig",
+    "PayloadIndexField",
     "EmbeddingProviderType",
     "VectorStoreProviderType"
 ]
