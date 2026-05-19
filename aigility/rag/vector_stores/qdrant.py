@@ -11,6 +11,7 @@ Qdrant 向量库适配器
         qdrant/qdrant
 """
 
+import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -123,6 +124,10 @@ class QdrantAdapter:
             )
             print(f"✅ 集合创建成功，向量维度：{actual_dim}")
 
+            # 新建集合时自动创建 Payload Index
+            if config.payload_index.enabled and config.payload_index.auto_create:
+                QdrantAdapter._create_payload_indexes(client, config)
+
         # 5. 创建向量存储 - 优先使用 langchain_community
         try:
             from langchain_community.vectorstores import Qdrant
@@ -146,6 +151,60 @@ class QdrantAdapter:
                 "使用 Qdrant 向量库需要安装: "
                 "pip install langchain-community qdrant-client"
             )
+
+
+    @staticmethod
+    def ensure_payload_indexes(client, config: "VectorStoreConfig"):
+        """
+        确保 Payload Index 已创建（对外接口）
+
+        可在服务启动时或手动调用，为已有 collection 补建索引。
+        对已存在的索引幂等，可重复调用。
+
+        Args:
+            client: QdrantClient 实例
+            config: VectorStoreConfig 配置
+        """
+        QdrantAdapter._create_payload_indexes(client, config)
+
+    @staticmethod
+    def _create_payload_indexes(client, config: "VectorStoreConfig"):
+        """
+        为 collection 创建 Payload Index
+
+        对已有字段建立倒排索引，加速带 filter 的检索操作。
+        create_payload_index 对已存在的索引幂等，不会报错。
+
+        Args:
+            client: QdrantClient 实例
+            config: VectorStoreConfig 配置
+        """
+        try:
+            from qdrant_client.models import PayloadSchemaType
+        except ImportError:
+            return
+
+        index_config = config.payload_index
+        if not index_config.enabled:
+            return
+
+        field_schema_map = index_config.get_field_schema_map()
+        created = 0
+
+        for field_name, field_schema in field_schema_map.items():
+            try:
+                client.create_payload_index(
+                    collection_name=config.collection_name,
+                    field_name=field_name,
+                    field_schema=field_schema,
+                )
+                created += 1
+            except Exception as e:
+                # 索引已存在时 Qdrant 会抛异常，忽略即可
+                logging.debug(f"Payload index '{field_name}' skip: {e}")
+
+        if created > 0:
+            print(f"✅ Payload Index 已创建：{created}/{len(field_schema_map)} 个字段")
 
 
 __all__ = ["QdrantAdapter"]

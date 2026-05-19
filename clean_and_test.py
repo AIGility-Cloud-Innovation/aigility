@@ -48,6 +48,22 @@ rag_config = RAGConfig(
 
 rag_service = RAGService(config=rag_config)
 
+# 0. 验证 Payload Index
+print("\n0️⃣ 验证 Payload Index")
+print("-" * 80)
+try:
+    client = rag_service.vector_store.client
+    collection = client.get_collection("adp_knowledge_base")
+    schema = collection.payload_schema
+    if schema:
+        print(f"✅ Payload Index 已建立，共 {len(schema)} 个字段：")
+        for field, info in schema.items():
+            print(f"   - {field}: {info.type}")
+    else:
+        print("⚠️ Payload Schema 为空，索引可能未建立")
+except Exception as e:
+    print(f"⚠️ 查询索引状态失败: {e}")
+
 # 1. 清空知识库
 print("\n1️⃣ 清空知识库")
 print("-" * 80)
