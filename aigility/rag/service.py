@@ -6,6 +6,7 @@ import sys
 import shutil
 import hashlib
 import logging
+from datetime import datetime, timezone
 from typing import Optional, Dict, List
 from collections import defaultdict
 
@@ -387,14 +388,18 @@ class RAGService:
                 # ========================================================
                 total_chunks = len(chunks)
                 CONTEXT_BUFFER_SIZE = 250  # 预存前后 250 个字符
+                created_at = datetime.now(timezone.utc).isoformat()
 
                 for i, chunk in enumerate(chunks):
                     # 基础元数据
                     chunk.metadata["file_hash"] = file_hash
                     chunk.metadata["file_name"] = doc_name
-                    chunk.metadata["chunk_index"] = i  # 记录顺序 ID，这很重要
+                    chunk.metadata["source_file"] = doc_name
+                    chunk.metadata["chunk_id"] = f"{file_hash}_c{i:04d}"
+                    chunk.metadata["chunk_index"] = i
                     chunk.metadata["total_chunks"] = total_chunks
-                    chunk.metadata["is_deleted"] = False  # 软删除标记
+                    chunk.metadata["is_deleted"] = False
+                    chunk.metadata["created_at"] = created_at
                     
                     # 注入前文 (Look-behind)
                     if i > 0:
@@ -1222,8 +1227,21 @@ class RAGService:
                 full_text = "".join(block)
                 full_text = full_text.replace("...]  [>>接下文:", "")
 
+                # 提取 metadata 信息
+                first_doc = group[0]
+                heading = first_doc.metadata.get("heading", "")
+                content_type = first_doc.metadata.get("content_type", "")
+                section_path = first_doc.metadata.get("section_path", "")
+
+                # 构建引用头信息
+                header_parts = [f"来源: {source_name} (片段 {i+1})"]
+                if heading:
+                    header_parts.append(f"章节: {heading}")
+                if content_type and content_type != "text":
+                    header_parts.append(f"类型: {content_type}")
+
                 result_item = (
-                    f"--- [引用] 来源: {source_name} (片段 {i+1}) ---\n"
+                    f"--- [{' | '.join(header_parts)}] ---\n"
                     f"{full_text}\n"
                 )
                 final_results.append(result_item)

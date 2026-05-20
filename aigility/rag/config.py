@@ -127,6 +127,8 @@ class PayloadIndexConfig(BaseModel):
             PayloadIndexField(field_name="metadata.file_type", field_type="keyword"),
             PayloadIndexField(field_name="metadata.chunk_index", field_type="integer"),
             PayloadIndexField(field_name="metadata.is_deleted", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.content_type", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.heading", field_type="keyword"),
         ],
         description="需要建立索引的字段列表"
     )
