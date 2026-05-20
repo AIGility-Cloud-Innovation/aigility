@@ -72,19 +72,30 @@ class MarkdownASTSplitter:
         Returns:
             切分后的文本列表
         """
+        results = self.split_text_structured(text)
+        return [r['text'] for r in results]
+
+    def split_text_structured(self, text: str) -> List[Dict[str, Any]]:
+        """
+        将 Markdown 文本切分为结构化 chunks
+
+        Args:
+            text: Markdown 格式的文本
+
+        Returns:
+            结构化切分结果列表，每个元素包含:
+            - text: 切分后的文本
+            - content_type: 内容类型 (text/table/code)
+            - heading: 所属标题
+            - section_path: 面包屑路径
+            - block_types: 包含的 block 类型列表
+        """
         if not text or not text.strip():
             return []
 
-        # 解析 Markdown 为 AST
         tokens = self.md.parse(text)
-
-        # 将 token 转换为结构化块
         blocks = self._tokens_to_blocks(tokens)
-
-        # 合并小块，确保不超过 chunk_size
-        chunks = self._merge_blocks(blocks)
-
-        return chunks
+        return self._merge_blocks(blocks)
 
     def split_documents(self, documents: List[Document]) -> List[Document]:
         """
@@ -98,28 +109,29 @@ class MarkdownASTSplitter:
         """
         result = []
         for doc in documents:
-            chunks = self.split_text(doc.page_content)
+            chunks = self.split_text_structured(doc.page_content)
+            chunk_texts = [c['text'] for c in chunks]
 
-            # 计算每个 chunk 的前后 buffer
-            for i, chunk in enumerate(chunks):
+            for i, chunk_data in enumerate(chunks):
                 # 前 buffer: 前一个 chunk 的末尾
                 prev_buffer = ""
                 if i > 0:
-                    prev_chunk = chunks[i - 1]
-                    prev_buffer = prev_chunk[-self.context_buffer_size:]
+                    prev_buffer = chunk_texts[i - 1][-self.context_buffer_size:]
 
                 # 后 buffer: 后一个 chunk 的开头
                 next_buffer = ""
-                if i < len(chunks) - 1:
-                    next_chunk = chunks[i + 1]
-                    next_buffer = next_chunk[:self.context_buffer_size]
+                if i < len(chunk_texts) - 1:
+                    next_buffer = chunk_texts[i + 1][:self.context_buffer_size]
 
                 result.append(Document(
-                    page_content=chunk,
+                    page_content=chunk_data['text'],
                     metadata={
                         **doc.metadata,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
+                        "content_type": chunk_data['content_type'],
+                        "heading": chunk_data['heading'],
+                        "section_path": chunk_data['section_path'],
                         "prev_buffer": prev_buffer,
                         "next_buffer": next_buffer,
                     }
@@ -287,116 +299,183 @@ class MarkdownASTSplitter:
 
         return '\n'.join(items) if items else None
 
-    def _merge_blocks(self, blocks: List[Dict[str, Any]]) -> List[str]:
+    def _merge_blocks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         合并小块，确保每个 chunk 不超过 chunk_size
 
-        策略:
-        1. 标题与其紧随的内容（段落、表格、列表）保持在一起
-        2. 如果单个块超过 chunk_size，尝试进一步切分
-        3. 保持 chunk_overlap 的重叠
+        返回结构化结果，每个 chunk 包含:
+        - text: 合并后的文本
+        - content_type: 主要内容类型 (text/table/code)
+        - heading: 当前所属标题
+        - section_path: 面包屑路径
+        - block_types: 该 chunk 包含的所有 block 类型
         """
         if not blocks:
             return []
 
-        chunks = []
-        current_chunk = []
+        results = []
+        current_chunk_texts = []
+        current_block_types = []
         current_size = 0
+        heading_stack = []  # [(level, raw_content), ...]
+        # 记录当前 chunk 开始时的标题上下文
+        chunk_heading = ""
+        chunk_section_path = ""
+
+        def _detect_content_type(block_types):
+            """根据 block 类型列表判断主要 content_type"""
+            if 'table' in block_types:
+                return 'table'
+            if 'code' in block_types:
+                return 'code'
+            return 'text'
+
+        def _save_chunk():
+            """保存当前 chunk 到 results"""
+            if current_chunk_texts:
+                results.append({
+                    'text': '\n\n'.join(current_chunk_texts),
+                    'content_type': _detect_content_type(current_block_types),
+                    'heading': chunk_heading,
+                    'section_path': chunk_section_path,
+                    'block_types': list(current_block_types),
+                })
+
+        def _start_new_chunk():
+            """重置当前 chunk 状态"""
+            nonlocal current_chunk_texts, current_block_types, current_size
+            current_chunk_texts = []
+            current_block_types = []
+            current_size = 0
+
+        def _capture_heading():
+            """捕获当前标题上下文到 chunk 级别变量"""
+            nonlocal chunk_heading, chunk_section_path
+            if heading_stack:
+                chunk_heading = heading_stack[-1][1]
+                chunk_section_path = " > ".join(h[1] for h in heading_stack)
+            else:
+                chunk_heading = ""
+                chunk_section_path = ""
 
         i = 0
         while i < len(blocks):
             block = blocks[i]
             block_content = block['content']
             block_size = self.length_function(block_content)
+            block_type = block['type']
 
             # 检查是否是标题块
-            is_heading = block['type'] == 'heading'
+            is_heading = block_type == 'heading'
 
             # 如果是标题，尝试将后续内容合并
             if is_heading and i + 1 < len(blocks):
+                # 先更新标题层级
+                level = block['level']
+                while heading_stack and heading_stack[-1][0] >= level:
+                    heading_stack.pop()
+                heading_stack.append((level, block['raw_content']))
+
                 next_block = blocks[i + 1]
                 next_content = next_block['content']
                 next_size = self.length_function(next_content)
 
-                # 检查合并后是否超过 chunk_size
-                combined_size = current_size + block_size + 1 + next_size  # +1 for newline
+                combined_size = current_size + block_size + 1 + next_size
 
                 if combined_size <= self.chunk_size:
-                    # 合并标题和下一个块
+                    if not current_chunk_texts:
+                        _capture_heading()
                     combined_content = f"{block_content}\n\n{next_content}"
-                    current_chunk.append(combined_content)
+                    current_chunk_texts.append(combined_content)
+                    current_block_types.append(block_type)
+                    current_block_types.append(next_block['type'])
                     current_size += block_size + 1 + next_size
-                    i += 2  # 跳过下一个块
+                    i += 2
                     continue
                 else:
-                    # 标题+下一个块超过 chunk_size，但标题必须和内容保持在一起
-                    # 先保存当前 chunk（如果有内容）
-                    if current_chunk:
-                        chunks.append('\n\n'.join(current_chunk))
-                        current_chunk = []
-                        current_size = 0
-                    # 标题和下一个块强制合并（允许超过 chunk_size）
+                    if current_chunk_texts:
+                        _save_chunk()
+                        _start_new_chunk()
+                    _capture_heading()
                     combined_content = f"{block_content}\n\n{next_content}"
-                    current_chunk.append(combined_content)
+                    current_chunk_texts.append(combined_content)
+                    current_block_types.append(block_type)
+                    current_block_types.append(next_block['type'])
                     current_size = block_size + 1 + next_size
-                    i += 2  # 跳过下一个块
+                    i += 2
                     continue
 
             # 检查当前块是否能加入当前 chunk
             if current_size + block_size <= self.chunk_size:
-                current_chunk.append(block_content)
+                if not current_chunk_texts:
+                    _capture_heading()
+                current_chunk_texts.append(block_content)
+                current_block_types.append(block_type)
                 current_size += block_size
                 i += 1
             else:
                 # 当前 chunk 已满
-                # 如果当前 chunk 太小，尝试和下一个 block 合并（避免小 chunk）
                 if current_size < self.min_chunk_size and i + 1 < len(blocks):
-                    current_chunk.append(block_content)
+                    if not current_chunk_texts:
+                        _capture_heading()
+                    current_chunk_texts.append(block_content)
+                    current_block_types.append(block_type)
                     current_size += block_size
                     i += 1
                     continue
 
                 # 保存当前 chunk
-                if current_chunk:
-                    chunks.append('\n\n'.join(current_chunk))
+                if current_chunk_texts:
+                    _save_chunk()
                     # 保留 overlap
-                    if self.chunk_overlap > 0 and current_chunk:
-                        overlap_text = current_chunk[-1]
+                    if self.chunk_overlap > 0 and current_chunk_texts:
+                        overlap_text = current_chunk_texts[-1]
                         overlap_size = self.length_function(overlap_text)
                         if overlap_size <= self.chunk_overlap:
-                            current_chunk = [overlap_text]
+                            current_chunk_texts = [overlap_text]
                             current_size = overlap_size
                         else:
-                            # 从最后一个块中截取 overlap
                             overlap_text = overlap_text[-self.chunk_overlap:]
-                            current_chunk = [overlap_text]
+                            current_chunk_texts = [overlap_text]
                             current_size = self.chunk_overlap
                     else:
-                        current_chunk = []
+                        current_chunk_texts = []
                         current_size = 0
+                    current_block_types = []
 
                 # 如果单个块超过 chunk_size，需要切分
                 if block_size > self.chunk_size:
-                    # 表格/列表块不切分，保持结构完整（允许超过 chunk_size）
-                    if block['type'] in ('table', 'list'):
-                        current_chunk = [block_content]
+                    if block_type in ('table', 'list'):
+                        _capture_heading()
+                        current_chunk_texts = [block_content]
+                        current_block_types = [block_type]
                         current_size = block_size
                     else:
+                        _capture_heading()
                         sub_chunks = self._split_large_block(block_content)
-                        chunks.extend(sub_chunks[:-1])  # 除最后一个都直接添加
-                        current_chunk = [sub_chunks[-1]] if sub_chunks else []
+                        for sc in sub_chunks[:-1]:
+                            results.append({
+                                'text': sc,
+                                'content_type': _detect_content_type([block_type]),
+                                'heading': chunk_heading,
+                                'section_path': chunk_section_path,
+                                'block_types': [block_type],
+                            })
+                        current_chunk_texts = [sub_chunks[-1]] if sub_chunks else []
+                        current_block_types = [block_type] if sub_chunks else []
                         current_size = self.length_function(sub_chunks[-1]) if sub_chunks else 0
                 else:
-                    current_chunk = [block_content]
+                    _capture_heading()
+                    current_chunk_texts = [block_content]
+                    current_block_types = [block_type]
                     current_size = block_size
 
                 i += 1
 
         # 保存最后一个 chunk
-        if current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
+        _save_chunk()
 
-        return chunks
+        return results
 
     def _split_large_block(self, content: str) -> List[str]:
         """切分超过 chunk_size 的大块"""

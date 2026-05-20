@@ -58,7 +58,8 @@ try:
     if schema:
         print(f"✅ Payload Index 已建立，共 {len(schema)} 个字段：")
         for field, info in schema.items():
-            print(f"   - {field}: {info.type}")
+            field_type = getattr(info, 'type', None) or getattr(info, 'data_type', 'unknown')
+            print(f"   - {field}: {field_type}")
     else:
         print("⚠️ Payload Schema 为空，索引可能未建立")
 except Exception as e:
