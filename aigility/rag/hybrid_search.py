@@ -235,64 +235,52 @@ def enhanced_search_method(self, query: str, expand_context: bool = True, use_hy
             return ""
 
         # ========================================================
-        # 结果融合（与原方法相同）
+        # 结果格式化（支持 Small2Big 和 Legacy 两种模式）
         # ========================================================
-        grouped_docs = {}
-        for doc in docs:
-            f_hash = doc.metadata.get("file_hash", "unknown")
-            if f_hash not in grouped_docs:
-                grouped_docs[f_hash] = []
-            grouped_docs[f_hash].append(doc)
-
         final_results = []
+        seen_parent_ids = set()
 
-        for f_hash, group in grouped_docs.items():
-            group.sort(key=lambda x: x.metadata.get("chunk_index", 0))
+        for doc in docs:
+            content = doc.page_content.strip()
+            parent_text = doc.metadata.get("parent_text", "")
 
-            merged_texts = []
-            current_block = []
-            last_index = -999
+            # Small2Big: 使用 parent_text 作为扩展上下文
+            if expand_context and parent_text:
+                parent_chunk_id = doc.metadata.get("parent_chunk_id", "")
+                if parent_chunk_id and parent_chunk_id in seen_parent_ids:
+                    continue
+                if parent_chunk_id:
+                    seen_parent_ids.add(parent_chunk_id)
+                full_text = parent_text
+            elif expand_context:
+                # Legacy 回退
+                prev_buffer = doc.metadata.get("prev_buffer", "")
+                next_buffer = doc.metadata.get("next_buffer", "")
+                parts = []
+                if prev_buffer:
+                    parts.append(f" [...前文: {prev_buffer}...]")
+                parts.append(content)
+                if next_buffer:
+                    parts.append(f" [>>接下文: {next_buffer}...]")
+                full_text = "".join(parts)
+            else:
+                full_text = content
 
-            for doc in group:
-                current_index = doc.metadata.get("chunk_index", 0)
-                content = doc.page_content.strip()
+            source_name = doc.metadata.get("file_name", "Unknown")
+            heading = doc.metadata.get("heading", "")
+            content_type = doc.metadata.get("content_type", "")
 
-                if current_index == last_index + 1:
-                    current_block.append(content)
-                else:
-                    if current_block:
-                        merged_texts.append(current_block)
-                    current_block = [content]
+            header_parts = [f"来源: {source_name}"]
+            if heading:
+                header_parts.append(f"章节: {heading}")
+            if content_type and content_type != "text":
+                header_parts.append(f"类型: {content_type}")
 
-                    if expand_context and doc.metadata.get("prev_buffer"):
-                        pass
-
-                is_last_in_group = (doc == group[-1])
-                next_is_missing = True
-                if not is_last_in_group:
-                    next_doc_index = group[group.index(doc) + 1].metadata.get("chunk_index", 0)
-                    if next_doc_index == current_index + 1:
-                        next_is_missing = False
-
-                if expand_context and next_is_missing and doc.metadata.get("next_buffer"):
-                    buffer_text = doc.metadata["next_buffer"]
-                    current_block.append(f" [>>接下文: {buffer_text}...] ")
-
-                last_index = current_index
-
-            if current_block:
-                merged_texts.append(current_block)
-
-            source_name = group[0].metadata.get("file_name", "Unknown")
-            for i, block in enumerate(merged_texts):
-                full_text = "".join(block)
-                full_text = full_text.replace("...]  [>>接下文:", "")
-
-                result_item = (
-                    f"--- [引用] 来源: {source_name} (片段 {i+1}) ---\n"
-                    f"{full_text}\n"
-                )
-                final_results.append(result_item)
+            result_item = (
+                f"--- [{' | '.join(header_parts)}] ---\n"
+                f"{full_text}\n"
+            )
+            final_results.append(result_item)
 
         return "\n".join(final_results)
 

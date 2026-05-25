@@ -42,6 +42,10 @@ class MarkdownASTSplitter:
         length_function: callable = len,
         context_buffer_size: int = 100,
         min_chunk_size: int = 100,
+        enable_small2big: bool = False,
+        parent_chunk_size: int = 1024,
+        child_chunk_size: int = 256,
+        child_chunk_overlap: int = 64,
     ):
         """
         初始化切分器
@@ -52,12 +56,20 @@ class MarkdownASTSplitter:
             length_function: 计算文本长度的函数
             context_buffer_size: 上下文扩展时前后 buffer 的大小（字符数）
             min_chunk_size: 最小 chunk 大小，避免生成太小的 chunk
+            enable_small2big: 是否启用 small2big 两层分块
+            parent_chunk_size: 父块目标大小（字符数）
+            child_chunk_size: 子块目标大小（字符数）
+            child_chunk_overlap: 子块之间的重叠大小（字符数）
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.length_function = length_function
         self.context_buffer_size = context_buffer_size
         self.min_chunk_size = min_chunk_size
+        self.enable_small2big = enable_small2big
+        self.parent_chunk_size = parent_chunk_size
+        self.child_chunk_size = child_chunk_size
+        self.child_chunk_overlap = child_chunk_overlap
 
         # 初始化 markdown-it 解析器，启用表格插件
         self.md = MarkdownIt().enable('table')
@@ -136,6 +148,147 @@ class MarkdownASTSplitter:
                         "next_buffer": next_buffer,
                     }
                 ))
+        return result
+
+    # ========================================================
+    # Small2Big: 两层分块
+    # ========================================================
+
+    def split_text_structured_small2big(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Small2Big 两层分块：先生成 parent chunks，再拆成 child chunks
+
+        Phase 1: 用 parent_chunk_size 上限合并 AST blocks -> parent chunks
+        Phase 2: 每个 parent chunk 按 child_chunk_size 拆成 child chunks
+
+        Returns:
+            每个 child chunk dict 包含:
+            - text: child chunk 文本
+            - parent_text: 完整 parent chunk 文本
+            - parent_index: parent chunk 在文档中的索引
+            - child_index: child 在 parent 中的索引
+            - total_children_in_parent: parent 被拆成的 child 总数
+            - content_type, heading, section_path, block_types: 继承自 parent
+        """
+        if not text or not text.strip():
+            return []
+
+        # Phase 1: 生成 parent chunks
+        tokens = self.md.parse(text)
+        blocks = self._tokens_to_blocks(tokens)
+        parent_chunks = self._merge_blocks(blocks, max_size=self.parent_chunk_size)
+
+        # Phase 2: 每个 parent chunk 拆成 child chunks
+        all_children = []
+        for parent_idx, parent in enumerate(parent_chunks):
+            parent_text = parent['text']
+            content_type = parent['content_type']
+
+            # 表格和代码块不拆分，整个作为单个 child
+            if content_type in ('table', 'code') or len(parent_text) <= self.child_chunk_size:
+                all_children.append({
+                    'text': parent_text,
+                    'parent_text': parent_text,
+                    'parent_index': parent_idx,
+                    'child_index': 0,
+                    'total_children_in_parent': 1,
+                    'content_type': content_type,
+                    'heading': parent['heading'],
+                    'section_path': parent['section_path'],
+                    'block_types': parent['block_types'],
+                })
+            else:
+                # 按句子边界拆分 parent 文本
+                child_texts = self._split_text_to_children(parent_text)
+                for child_idx, child_text in enumerate(child_texts):
+                    all_children.append({
+                        'text': child_text,
+                        'parent_text': parent_text,
+                        'parent_index': parent_idx,
+                        'child_index': child_idx,
+                        'total_children_in_parent': len(child_texts),
+                        'content_type': content_type,
+                        'heading': parent['heading'],
+                        'section_path': parent['section_path'],
+                        'block_types': parent['block_types'],
+                    })
+
+        return all_children
+
+    def _split_text_to_children(self, text: str) -> List[str]:
+        """
+        将文本按句子边界拆分为 child chunks
+
+        使用 child_chunk_size 和 child_chunk_overlap 参数。
+        """
+        # 按句子切分（中英文标点）
+        sentences = re.split(r'(?<=[。！？；.!?;])', text)
+        sentences = [s for s in sentences if s.strip()]
+
+        if not sentences:
+            return [text]
+
+        children = []
+        current_chunk = []
+        current_size = 0
+
+        for sentence in sentences:
+            sentence_size = self.length_function(sentence)
+
+            if current_size + sentence_size <= self.child_chunk_size:
+                current_chunk.append(sentence)
+                current_size += sentence_size
+            else:
+                if current_chunk:
+                    children.append(''.join(current_chunk))
+                # 开始新 chunk，带 overlap
+                if self.child_chunk_overlap > 0 and current_chunk:
+                    overlap_text = ''.join(current_chunk)[-self.child_chunk_overlap:]
+                    current_chunk = [overlap_text, sentence]
+                    current_size = self.length_function(overlap_text) + sentence_size
+                else:
+                    current_chunk = [sentence]
+                    current_size = sentence_size
+
+        if current_chunk:
+            children.append(''.join(current_chunk))
+
+        return children if children else [text]
+
+    def split_documents_small2big(self, documents: List[Document]) -> List[Document]:
+        """
+        Small2Big 版本的文档切分
+
+        为每个 child chunk 创建 Document 对象，metadata 中包含 parent_text。
+        不包含 prev_buffer/next_buffer。
+        """
+        result = []
+        global_child_index = 0
+
+        for doc in documents:
+            chunks = self.split_text_structured_small2big(doc.page_content)
+
+            for chunk_data in chunks:
+                result.append(Document(
+                    page_content=chunk_data['text'],
+                    metadata={
+                        **doc.metadata,
+                        "chunk_index": global_child_index,
+                        "parent_text": chunk_data['parent_text'],
+                        "parent_index": chunk_data['parent_index'],
+                        "child_index": chunk_data['child_index'],
+                        "total_children_in_parent": chunk_data['total_children_in_parent'],
+                        "content_type": chunk_data['content_type'],
+                        "heading": chunk_data['heading'],
+                        "section_path": chunk_data['section_path'],
+                    }
+                ))
+                global_child_index += 1
+
+        # 回填 total_chunks
+        for doc in result:
+            doc.metadata["total_chunks"] = global_child_index
+
         return result
 
     def _tokens_to_blocks(self, tokens: List[Token]) -> List[Dict[str, Any]]:
@@ -299,9 +452,9 @@ class MarkdownASTSplitter:
 
         return '\n'.join(items) if items else None
 
-    def _merge_blocks(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _merge_blocks(self, blocks: List[Dict[str, Any]], max_size: int = None) -> List[Dict[str, Any]]:
         """
-        合并小块，确保每个 chunk 不超过 chunk_size
+        合并小块，确保每个 chunk 不超过 max_size
 
         返回结构化结果，每个 chunk 包含:
         - text: 合并后的文本
@@ -309,9 +462,16 @@ class MarkdownASTSplitter:
         - heading: 当前所属标题
         - section_path: 面包屑路径
         - block_types: 该 chunk 包含的所有 block 类型
+
+        Args:
+            blocks: 解析后的 block 列表
+            max_size: 最大 chunk 大小，默认使用 self.chunk_size
         """
         if not blocks:
             return []
+
+        if max_size is None:
+            max_size = self.chunk_size
 
         results = []
         current_chunk_texts = []
@@ -382,7 +542,7 @@ class MarkdownASTSplitter:
 
                 combined_size = current_size + block_size + 1 + next_size
 
-                if combined_size <= self.chunk_size:
+                if combined_size <= max_size:
                     if not current_chunk_texts:
                         _capture_heading()
                     combined_content = f"{block_content}\n\n{next_content}"
@@ -406,7 +566,7 @@ class MarkdownASTSplitter:
                     continue
 
             # 检查当前块是否能加入当前 chunk
-            if current_size + block_size <= self.chunk_size:
+            if current_size + block_size <= max_size:
                 if not current_chunk_texts:
                     _capture_heading()
                 current_chunk_texts.append(block_content)
@@ -444,7 +604,7 @@ class MarkdownASTSplitter:
                     current_block_types = []
 
                 # 如果单个块超过 chunk_size，需要切分
-                if block_size > self.chunk_size:
+                if block_size > max_size:
                     if block_type in ('table', 'list'):
                         _capture_heading()
                         current_chunk_texts = [block_content]
@@ -452,7 +612,7 @@ class MarkdownASTSplitter:
                         current_size = block_size
                     else:
                         _capture_heading()
-                        sub_chunks = self._split_large_block(block_content)
+                        sub_chunks = self._split_large_block(block_content, max_size)
                         for sc in sub_chunks[:-1]:
                             results.append({
                                 'text': sc,
@@ -477,8 +637,10 @@ class MarkdownASTSplitter:
 
         return results
 
-    def _split_large_block(self, content: str) -> List[str]:
-        """切分超过 chunk_size 的大块"""
+    def _split_large_block(self, content: str, max_size: int = None) -> List[str]:
+        """切分超过 max_size 的大块"""
+        if max_size is None:
+            max_size = self.chunk_size
         chunks = []
         current_chunk = []
         current_size = 0
@@ -493,7 +655,7 @@ class MarkdownASTSplitter:
 
             sentence_size = self.length_function(sentence)
 
-            if current_size + sentence_size <= self.chunk_size:
+            if current_size + sentence_size <= max_size:
                 current_chunk.append(sentence)
                 current_size += sentence_size
             else:
@@ -502,11 +664,11 @@ class MarkdownASTSplitter:
                     current_chunk = [sentence]
                     current_size = sentence_size
                 else:
-                    # 单个句子就超过 chunk_size，强制切分
-                    chunks.append(sentence[:self.chunk_size])
-                    if sentence[self.chunk_size:]:
-                        current_chunk = [sentence[self.chunk_size:]]
-                        current_size = self.length_function(sentence[self.chunk_size:])
+                    # 单个句子就超过 max_size，强制切分
+                    chunks.append(sentence[:max_size])
+                    if sentence[max_size:]:
+                        current_chunk = [sentence[max_size:]]
+                        current_size = self.length_function(sentence[max_size:])
 
         if current_chunk:
             chunks.append(''.join(current_chunk))
