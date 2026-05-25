@@ -8,5 +8,5 @@
   "max_retrieval_time_ms": 493.602991104126,
   "total_cases": 30,
   "timestamp": "2026-05-18T19:28:33.607006",
-  "mode": "optimized"
+  "mode": "baseline"
 }

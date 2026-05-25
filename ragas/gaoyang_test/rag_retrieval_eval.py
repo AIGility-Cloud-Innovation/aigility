@@ -43,10 +43,10 @@ class EvalConfig:
     top_k: int = 5
 
     # 测试数据路径
-    test_data_path: str = "ragas_test_cases_gaoyang_textile.csv"
+    test_data_path: str = "baseline/ragas_test_cases_gaoyang_textile_cn.csv"
 
     # 结果输出路径
-    output_dir: str = "."
+    output_dir: str = "baseline"
 
 
 # ============================================================
@@ -241,7 +241,7 @@ def run_retrieval_evaluation(
     results = []
     total = len(test_cases)
 
-    mode = "优化后" if use_optimized else "Baseline"
+    mode = "opti_v1" if use_optimized else "Baseline"
     print(f"\n🔍 开始 {mode} 检索评估 (共 {total} 条)...")
 
     for i, case in enumerate(test_cases):
@@ -493,22 +493,17 @@ def ensure_knowledge_base(rag_service):
     if not pdf_path.exists():
         print(f"❌ 文档不存在: {pdf_path}")
         return False
-
+    
     # 检查是否已有数据
     try:
         from qdrant_client import QdrantClient
         client = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"))
 
-        try:
-            info = client.get_collection("gaoyang_textile")
-            if info.points_count and info.points_count > 0:
-                print(f"✅ 知识库已有 {info.points_count} 条数据，跳过添加")
-                return True
-        except:
-            pass  # 集合不存在，需要创建
+        
 
         # 添加文档
         print(f"📦 添加文档: {pdf_path.name}")
+        rag_service.clear_knowledge_base()
         result = rag_service.add_file(str(pdf_path), auto_build_bm25=True)
         print(f"✅ 文档添加成功")
         print(f"   文件哈希: {result.get('file_hash', 'N/A')[:16]}...")
@@ -546,6 +541,7 @@ def main():
     parser.add_argument("--display", action="store_true", help="只查看已有结果")
     parser.add_argument("--top-k", type=int, default=5, help="检索返回数量")
     parser.add_argument("--test-file", type=str, help="测试数据文件路径")
+    parser.add_argument("--output-dir", type=str, help="结果输出目录（默认: baseline/）")
     args = parser.parse_args()
 
     # 配置
@@ -555,7 +551,7 @@ def main():
     # 路径
     script_dir = Path(__file__).parent
     test_file = args.test_file or str(script_dir / config.test_data_path)
-    output_dir = script_dir
+    output_dir = script_dir / (args.output_dir or config.output_dir)
 
     print("\n" + "=" * 60)
     print("📊 RAG 检索效果评估工具")
@@ -568,8 +564,8 @@ def main():
 
     # 只查看模式
     if args.display:
-        baseline_summary = output_dir / "retrieval_eval_baseline_summary.json"
-        optimized_summary = output_dir / "retrieval_eval_optimized_summary.json"
+        baseline_summary = script_dir / "baseline" / "retrieval_eval_baseline_summary.json"
+        optimized_summary = script_dir / "opti_v1" / "retrieval_eval_opti_v1_summary.json"
 
         if baseline_summary.exists():
             with open(baseline_summary) as f:
@@ -593,8 +589,8 @@ def main():
 
     # 对比模式
     if args.compare:
-        baseline_summary = output_dir / "retrieval_eval_baseline_summary.json"
-        optimized_summary = output_dir / "retrieval_eval_optimized_summary.json"
+        baseline_summary = script_dir / "baseline" / "retrieval_eval_baseline_summary.json"
+        optimized_summary = script_dir / "opti_v1" / "retrieval_eval_opti_v1_summary.json"
 
         if not baseline_summary.exists() or not optimized_summary.exists():
             print("❌ 请先运行 --baseline 和 --optimized 评估")
@@ -622,8 +618,8 @@ def main():
     if args.optimized:
         results = run_retrieval_evaluation(test_cases, config, use_optimized=True, rag_service=rag_service)
         summary = calculate_summary(results)
-        display_results(results, summary, "优化后")
-        save_results(results, summary, output_dir, "optimized")
+        display_results(results, summary, "opti_v1")
+        save_results(results, summary, output_dir, "opti_v1")
     else:
         # 默认运行 baseline
         results = run_retrieval_evaluation(test_cases, config, use_optimized=False, rag_service=rag_service)

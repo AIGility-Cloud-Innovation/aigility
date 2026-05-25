@@ -1,0 +1,12 @@
+{
+  "context_precision": 0.8888888888888888,
+  "context_recall": 0.8888888888888888,
+  "hit_rate": 0.9333333333333333,
+  "avg_retrieval_count": 1.0,
+  "avg_retrieval_time_ms": 190.717879931132,
+  "min_retrieval_time_ms": 142.5621509552002,
+  "max_retrieval_time_ms": 244.2009449005127,
+  "total_cases": 30,
+  "timestamp": "2026-05-25T16:42:29.199668",
+  "mode": "opti_v1"
+}
