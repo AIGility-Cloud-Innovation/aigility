@@ -381,45 +381,57 @@ class RAGService:
                     }
 
                 # ========================================================
-                # [核心优化 1]：注入上下文缓冲 (Context Buffering)
-                # ========================================================
-                # 我们在 metadata 中预存前后文，这样检索到切片时，
-                # 即使物理切割了，也能通过 metadata 找回断掉的句子。
+                # 注入元数据 + 上下文扩展
                 # ========================================================
                 total_chunks = len(chunks)
-                CONTEXT_BUFFER_SIZE = 250  # 预存前后 250 个字符
                 created_at = datetime.now(timezone.utc).isoformat()
 
-                for i, chunk in enumerate(chunks):
-                    # 基础元数据
-                    chunk.metadata["file_hash"] = file_hash
-                    chunk.metadata["file_name"] = doc_name
-                    chunk.metadata["source_file"] = doc_name
-                    chunk.metadata["chunk_id"] = f"{file_hash}_c{i:04d}"
-                    chunk.metadata["chunk_index"] = i
-                    chunk.metadata["total_chunks"] = total_chunks
-                    chunk.metadata["is_deleted"] = False
-                    chunk.metadata["created_at"] = created_at
-                    
-                    # 注入前文 (Look-behind)
-                    if i > 0:
-                        prev_text = chunks[i-1].page_content
-                        # 取上一段的最后 N 个字符
-                        chunk.metadata["prev_buffer"] = prev_text[-CONTEXT_BUFFER_SIZE:]
-                    else:
-                        chunk.metadata["prev_buffer"] = ""
+                if self.config.ingestion.enable_small2big:
+                    # Small2Big: parent_text 已由 splitter 注入 metadata
+                    # 这里只需要注入 file_hash 相关的元数据和 parent_chunk_id
+                    for i, chunk in enumerate(chunks):
+                        chunk.metadata["file_hash"] = file_hash
+                        chunk.metadata["file_name"] = doc_name
+                        chunk.metadata["source_file"] = doc_name
+                        chunk.metadata["chunk_id"] = f"{file_hash}_c{i:04d}"
+                        chunk.metadata["chunk_index"] = i
+                        chunk.metadata["total_chunks"] = total_chunks
+                        chunk.metadata["is_deleted"] = False
+                        chunk.metadata["created_at"] = created_at
+                        # 注入真实的 parent_chunk_id（splitter 不知道 file_hash）
+                        parent_idx = chunk.metadata.get("parent_index", 0)
+                        chunk.metadata["parent_chunk_id"] = f"{file_hash}_p{parent_idx:04d}"
+                else:
+                    # Legacy: 注入 prev/next buffer
+                    CONTEXT_BUFFER_SIZE = 250
+                    for i, chunk in enumerate(chunks):
+                        chunk.metadata["file_hash"] = file_hash
+                        chunk.metadata["file_name"] = doc_name
+                        chunk.metadata["source_file"] = doc_name
+                        chunk.metadata["chunk_id"] = f"{file_hash}_c{i:04d}"
+                        chunk.metadata["chunk_index"] = i
+                        chunk.metadata["total_chunks"] = total_chunks
+                        chunk.metadata["is_deleted"] = False
+                        chunk.metadata["created_at"] = created_at
 
-                    # 注入后文 (Look-ahead) -> 解决“问题在页末，答案在下页”的关键
-                    if i < total_chunks - 1:
-                        next_text = chunks[i+1].page_content
-                        # 取下一段的开始 N 个字符
-                        chunk.metadata["next_buffer"] = next_text[:CONTEXT_BUFFER_SIZE]
-                    else:
-                        chunk.metadata["next_buffer"] = ""
+                        if i > 0:
+                            prev_text = chunks[i-1].page_content
+                            chunk.metadata["prev_buffer"] = prev_text[-CONTEXT_BUFFER_SIZE:]
+                        else:
+                            chunk.metadata["prev_buffer"] = ""
+
+                        if i < total_chunks - 1:
+                            next_text = chunks[i+1].page_content
+                            chunk.metadata["next_buffer"] = next_text[:CONTEXT_BUFFER_SIZE]
+                        else:
+                            chunk.metadata["next_buffer"] = ""
 
                 doc_meta = self._generate_meta_from_chunks(chunks, doc_name)
                 self.vector_store.add_documents(chunks)
-                logging.info(f"✅ 已添加 {len(chunks)} 个切片 (带上下文缓冲)")
+                if self.config.ingestion.enable_small2big:
+                    logging.info(f"✅ 已添加 {len(chunks)} 个切片 (Small2Big: parent→child)")
+                else:
+                    logging.info(f"✅ 已添加 {len(chunks)} 个切片 (带上下文缓冲)")
 
                 # 自动构建BM25索引
                 if auto_build_bm25:
@@ -456,8 +468,8 @@ class RAGService:
             格式化的检索结果字符串
 
         示例:
-            >>> result = service.search(“目标市场”)
-            >>> result = service.search(“市场策略”, enable_keyword_boost=False)"""
+            >>> result = service.search("目标市场")
+            >>> result = service.search("市场策略", enable_keyword_boost=False)"""
         try:
             # 根据enable_keyword_boost设置BM25权重
             if enable_keyword_boost:
@@ -1136,13 +1148,18 @@ class RAGService:
 
             sorted_doc_ids = sorted(doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True)
 
-            # 取前top_k个文档
-            final_docs = [all_docs_dict[doc_id] for doc_id in sorted_doc_ids[:self.config.search_top_k]]
+            # Small2Big 模式下多取一些 child chunks，避免去重后结果不足
+            # 检测是否启用了 small-to-big（通过检查第一个文档是否有 parent_chunk_id）
+            sample_doc = all_docs_dict.get(sorted_doc_ids[0]) if sorted_doc_ids else None
+            is_small2big = sample_doc and sample_doc.metadata.get("parent_chunk_id")
+            fetch_count = self.config.search_top_k * 3 if is_small2big else self.config.search_top_k
+            final_docs = [all_docs_dict[doc_id] for doc_id in sorted_doc_ids[:fetch_count]]
 
             # 4. Rerank 重排序（可选）
             if self._reranker and final_docs:
                 try:
-                    top_n = self.config.rerank.top_n or self.config.search_top_k
+                    # Small2Big 时 rerank 多取一些，避免去重后不足
+                    top_n = self.config.rerank.top_n or (self.config.search_top_k * 3 if is_small2big else self.config.search_top_k)
                     final_docs = self._reranker.rerank_documents(
                         query, final_docs, top_n=top_n
                     )
@@ -1162,6 +1179,10 @@ class RAGService:
         """
         格式化检索结果（提取为独立方法以便复用）
 
+        支持两种上下文扩展模式:
+        - Small2Big: 使用 parent_text 替代 child chunk 内容，通过 parent_chunk_id 去重
+        - Legacy: 使用 prev_buffer/next_buffer 拼接前后文标记
+
         Args:
             docs: 文档列表
             expand_context: 是否扩展上下文
@@ -1172,79 +1193,51 @@ class RAGService:
         if not docs:
             return ""
 
-        # 按 (file_hash, chunk_index) 分组排序
-        grouped_docs = {}
-        for doc in docs:
-            f_hash = doc.metadata.get("file_hash", "unknown")
-            if f_hash not in grouped_docs:
-                grouped_docs[f_hash] = []
-            grouped_docs[f_hash].append(doc)
-
         final_results = []
+        seen_parent_ids = set()
 
-        for f_hash, group in grouped_docs.items():
-            group.sort(key=lambda x: x.metadata.get("chunk_index", 0))
+        for doc in docs:
+            content = doc.page_content.strip()
+            parent_text = doc.metadata.get("parent_text", "")
 
-            merged_texts = []
-            current_block = []
-            last_index = -999
+            # Small2Big: 使用 parent_text 作为扩展上下文
+            if expand_context and parent_text:
+                parent_chunk_id = doc.metadata.get("parent_chunk_id", "")
+                if parent_chunk_id and parent_chunk_id in seen_parent_ids:
+                    continue  # 同一 parent 已输出过，跳过
+                if parent_chunk_id:
+                    seen_parent_ids.add(parent_chunk_id)
+                full_text = parent_text
+            elif expand_context:
+                # Legacy 回退: 使用 buffer 标记
+                prev_buffer = doc.metadata.get("prev_buffer", "")
+                next_buffer = doc.metadata.get("next_buffer", "")
+                parts = []
+                if prev_buffer:
+                    parts.append(f" [...前文: {prev_buffer}...]")
+                parts.append(content)
+                if next_buffer:
+                    parts.append(f" [>>接下文: {next_buffer}...]")
+                full_text = "".join(parts)
+            else:
+                full_text = content
 
-            for doc in group:
-                current_index = doc.metadata.get("chunk_index", 0)
-                content = doc.page_content.strip()
+            # 构建引用头信息
+            source_name = doc.metadata.get("file_name", "Unknown")
+            heading = doc.metadata.get("heading", "")
+            content_type = doc.metadata.get("content_type", "")
 
-                if current_index == last_index + 1:
-                    current_block.append(content)
-                else:
-                    if current_block:
-                        merged_texts.append(current_block)
-                    current_block = [content]
+            header_parts = [f"来源: {source_name}"]
+            if heading:
+                header_parts.append(f"章节: {heading}")
+            if content_type and content_type != "text":
+                header_parts.append(f"类型: {content_type}")
 
-                # 添加前文 buffer（当前 chunk 不是第一个，且前一个 chunk 不连续）
-                if expand_context and current_index > 0 and doc.metadata.get("prev_buffer") and current_index != last_index + 1:
-                    buffer_text = doc.metadata["prev_buffer"]
-                    current_block.insert(0, f" [...前文: {buffer_text}...] ")
-
-                is_last_in_group = (doc == group[-1])
-                next_is_missing = True
-                if not is_last_in_group:
-                    next_doc_index = group[group.index(doc) + 1].metadata.get("chunk_index", 0)
-                    if next_doc_index == current_index + 1:
-                        next_is_missing = False
-
-                # 添加后文 buffer（下一个 chunk 不连续）
-                if expand_context and next_is_missing and doc.metadata.get("next_buffer"):
-                    buffer_text = doc.metadata["next_buffer"]
-                    current_block.append(f" [>>接下文: {buffer_text}...] ")
-
-                last_index = current_index
-
-            if current_block:
-                merged_texts.append(current_block)
-
-            source_name = group[0].metadata.get("file_name", "Unknown")
-            for i, block in enumerate(merged_texts):
-                full_text = "".join(block)
-                full_text = full_text.replace("...]  [>>接下文:", "")
-
-                # 提取 metadata 信息
-                first_doc = group[0]
-                heading = first_doc.metadata.get("heading", "")
-                content_type = first_doc.metadata.get("content_type", "")
-                section_path = first_doc.metadata.get("section_path", "")
-
-                # 构建引用头信息
-                header_parts = [f"来源: {source_name} (片段 {i+1})"]
-                if heading:
-                    header_parts.append(f"章节: {heading}")
-                if content_type and content_type != "text":
-                    header_parts.append(f"类型: {content_type}")
-
-                result_item = (
-                    f"--- [{' | '.join(header_parts)}] ---\n"
-                    f"{full_text}\n"
-                )
-                final_results.append(result_item)
+            result_item = (
+                f"--- [{' | '.join(header_parts)}] ---\n"
+                f"{full_text}\n"
+            )
+            final_results.append(result_item)
 
         return "\n".join(final_results)
 

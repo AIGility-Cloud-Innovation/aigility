@@ -47,6 +47,10 @@ class IngestionManager:
                 chunk_overlap=config.chunk_overlap,
                 context_buffer_size=config.context_buffer_size,
                 min_chunk_size=config.min_chunk_length,
+                enable_small2big=config.enable_small2big,
+                parent_chunk_size=config.parent_chunk_size,
+                child_chunk_size=config.child_chunk_size,
+                child_chunk_overlap=config.child_chunk_overlap,
             )
             self._use_ast = True
             print("✅ 使用 Markdown AST 切分器（保持标题-内容关联）")
@@ -391,7 +395,10 @@ class IngestionManager:
         logging.info(f"🔧 切分配置: chunk_size={self.config.chunk_size}, chunk_overlap={self.config.chunk_overlap}")
 
         if self._use_ast:
-            split_docs = self._ast_splitter.split_documents(cleaned_docs)
+            if self.config.enable_small2big:
+                split_docs = self._ast_splitter.split_documents_small2big(cleaned_docs)
+            else:
+                split_docs = self._ast_splitter.split_documents(cleaned_docs)
         else:
             split_docs = self.splitter.split_documents(cleaned_docs)
         

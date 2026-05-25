@@ -148,10 +148,10 @@ def call_rag_search_direct(
         if not result_str:
             return []
 
-        # 解析返回的文本，按 "--- [引用]" 分割各段
+        # 解析返回的文本，按 "--- [来源:" 分割各段
         import re
-        # 匹配 "--- [引用] 来源: xxx (片段 N) ---"
-        parts = re.split(r'---\s*\[引用\]\s*来源:.*?---', result_str)
+        # 匹配 "--- [来源: xxx | 章节: yyy] ---"
+        parts = re.split(r'---\s*\[来源:.*?\]\s*---', result_str)
 
         contexts = []
         for part in parts:
@@ -379,7 +379,8 @@ def save_results(
 
 def compare_results(
     baseline_path: Path,
-    optimized_path: Path
+    optimized_path: Path,
+    version_name: str = "opti_v1"
 ):
     """对比 baseline 和优化后的结果"""
     # 读取汇总结果
@@ -390,10 +391,10 @@ def compare_results(
         optimized = json.load(f)
 
     print("\n" + "=" * 70)
-    print("📊 Baseline vs 优化后 对比")
+    print(f"📊 Baseline vs {version_name} 对比")
     print("=" * 70)
 
-    print(f"\n{'指标':<15} {'Baseline':>10} {'优化后':>10} {'提升':>10} {'提升%':>10}")
+    print(f"\n{'指标':<15} {'Baseline':>10} {version_name:>10} {'提升':>10} {'提升%':>10}")
     print("-" * 70)
 
     # 质量指标
@@ -542,6 +543,7 @@ def main():
     parser.add_argument("--top-k", type=int, default=5, help="检索返回数量")
     parser.add_argument("--test-file", type=str, help="测试数据文件路径")
     parser.add_argument("--output-dir", type=str, help="结果输出目录（默认: baseline/）")
+    parser.add_argument("--version", type=str, default="opti_v1", help="优化版本名（默认: opti_v1）")
     args = parser.parse_args()
 
     # 配置
@@ -566,6 +568,7 @@ def main():
     if args.display:
         baseline_summary = script_dir / "baseline" / "retrieval_eval_baseline_summary.json"
         optimized_summary = script_dir / "opti_v1" / "retrieval_eval_opti_v1_summary.json"
+        v2_summary = script_dir / "opti_v2" / "retrieval_eval_opti_v2_summary.json"
 
         if baseline_summary.exists():
             with open(baseline_summary) as f:
@@ -578,25 +581,40 @@ def main():
         if optimized_summary.exists():
             with open(optimized_summary) as f:
                 data = json.load(f)
-            print("\n📊 优化后结果:")
+            print("\n📊 opti_v1 结果:")
             for k, v in data.items():
                 if isinstance(v, float):
                     print(f"  {k}: {v:.3f}")
 
+        if v2_summary.exists():
+            with open(v2_summary) as f:
+                data = json.load(f)
+            print("\n📊 opti_v2 结果:")
+            for k, v in data.items():
+                if isinstance(v, float):
+                    print(f"  {k}: {v:.3f}")
+
+        # 逐步对比
         if baseline_summary.exists() and optimized_summary.exists():
             compare_results(baseline_summary, optimized_summary)
+        if baseline_summary.exists() and v2_summary.exists():
+            compare_results(baseline_summary, v2_summary, "opti_v2")
         return
 
     # 对比模式
     if args.compare:
         baseline_summary = script_dir / "baseline" / "retrieval_eval_baseline_summary.json"
-        optimized_summary = script_dir / "opti_v1" / "retrieval_eval_opti_v1_summary.json"
+        opti_v1_summary = script_dir / "opti_v1" / "retrieval_eval_opti_v1_summary.json"
+        opti_v2_summary = script_dir / "opti_v2" / "retrieval_eval_opti_v2_summary.json"
 
-        if not baseline_summary.exists() or not optimized_summary.exists():
-            print("❌ 请先运行 --baseline 和 --optimized 评估")
+        if not baseline_summary.exists():
+            print("❌ 请先运行 --baseline 评估")
             return
 
-        compare_results(baseline_summary, optimized_summary)
+        # 对比所有可用版本
+        for v_name, v_path in [("opti_v1", opti_v1_summary), ("opti_v2", opti_v2_summary)]:
+            if v_path.exists():
+                compare_results(baseline_summary, v_path, v_name)
         return
 
     # 初始化 RAGService（直接调用模式）
@@ -616,10 +634,11 @@ def main():
 
     # 运行评估
     if args.optimized:
+        version = args.version
         results = run_retrieval_evaluation(test_cases, config, use_optimized=True, rag_service=rag_service)
         summary = calculate_summary(results)
-        display_results(results, summary, "opti_v1")
-        save_results(results, summary, output_dir, "opti_v1")
+        display_results(results, summary, version)
+        save_results(results, summary, output_dir, version)
     else:
         # 默认运行 baseline
         results = run_retrieval_evaluation(test_cases, config, use_optimized=False, rag_service=rag_service)

@@ -129,6 +129,7 @@ class PayloadIndexConfig(BaseModel):
             PayloadIndexField(field_name="metadata.is_deleted", field_type="keyword"),
             PayloadIndexField(field_name="metadata.content_type", field_type="keyword"),
             PayloadIndexField(field_name="metadata.heading", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.parent_chunk_id", field_type="keyword"),
         ],
         description="需要建立索引的字段列表"
     )
@@ -240,6 +241,12 @@ class IngestionConfig(BaseModel):
     enable_duplicate_removal: bool = Field(default=True, description="是否去重")
     enable_text_cleaning: bool = Field(default=True, description="是否清洗文本")
     enable_structured_tag: bool = Field(default=True, description="是否添加结构化标签")
+
+    # Small2Big 配置
+    enable_small2big: bool = Field(default=True, description="是否启用 small2big 分块策略")
+    parent_chunk_size: int = Field(default=1024, description="父块目标大小（字符数），约等于 512 tokens")
+    child_chunk_size: int = Field(default=256, description="子块目标大小（字符数），约等于 128 tokens")
+    child_chunk_overlap: int = Field(default=64, description="子块之间的重叠大小（字符数）")
 
 
 class RerankConfig(BaseModel):
