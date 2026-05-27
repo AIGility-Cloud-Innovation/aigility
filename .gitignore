@@ -37,3 +37,4 @@ release/
 *.pdf
 *.docx
 *.xlsx
+pipy/pypi-publish.md

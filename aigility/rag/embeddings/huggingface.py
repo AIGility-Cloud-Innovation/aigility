@@ -5,11 +5,13 @@ HuggingFace 嵌入模型适配器
 使用前需要安装: pip install sentence-transformers langchain-huggingface
 """
 
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
     from aigility.rag.config import EmbeddingConfig
+
+from ..usage_tracking import TokenUsage
 
 
 class HuggingFaceEmbeddingAdapter:
@@ -38,6 +40,7 @@ class HuggingFaceEmbeddingAdapter:
             model_name=config.model_name,
             **kwargs
         )
+        self._last_usage: Optional[TokenUsage] = None
 
     @classmethod
     def load(cls, config: "EmbeddingConfig"):
@@ -66,14 +69,36 @@ class HuggingFaceEmbeddingAdapter:
         """单文本嵌入（LangChain 强制接口）"""
         if not text.strip():
             return []
-        return self._embedding.embed_query(text.strip())
+        result = self._embedding.embed_query(text.strip())
+        total_chars = len(text.strip())
+        estimated_tokens = total_chars // 2
+        self._last_usage = TokenUsage(
+            input_tokens=estimated_tokens,
+            total_tokens=estimated_tokens,
+            model=self.config.model_name,
+        )
+        return result
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """多文本批量嵌入（LangChain 强制接口）"""
         valid_texts = [t.strip() for t in texts if t.strip()]
         if not valid_texts:
             return []
-        return self._embedding.embed_documents(valid_texts)
+        result = self._embedding.embed_documents(valid_texts)
+        total_chars = sum(len(t) for t in valid_texts)
+        estimated_tokens = total_chars // 2
+        self._last_usage = TokenUsage(
+            input_tokens=estimated_tokens,
+            total_tokens=estimated_tokens,
+            model=self.config.model_name,
+        )
+        return result
+
+    def get_last_usage(self) -> Optional[TokenUsage]:
+        return self._last_usage
+
+    def reset_usage(self):
+        self._last_usage = None
 
     def __call__(self, text: str) -> List[float]:
         """

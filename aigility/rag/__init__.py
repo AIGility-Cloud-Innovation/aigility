@@ -89,6 +89,8 @@ from .workflow import create_rag_workflow, RAGWorkflowState
 from .client import TimeMRAGClient, create_timem_rag_client
 from .ingestion import IngestionManager
 from .rerank import RerankFactory, BaseRerankAdapter
+from .usage_tracking import TokenUsage, UsageStats, SearchResult, AddFileResult
+from .embeddings.wrapper import EmbeddingWrapper
 
 __all__ = [
     # 基础服务
@@ -102,6 +104,12 @@ __all__ = [
     # Rerank
     "RerankFactory",
     "BaseRerankAdapter",
+    # Usage Tracking
+    "TokenUsage",
+    "UsageStats",
+    "SearchResult",
+    "AddFileResult",
+    "EmbeddingWrapper",
     # 工作流
     "create_rag_workflow",
     "RAGWorkflowState",

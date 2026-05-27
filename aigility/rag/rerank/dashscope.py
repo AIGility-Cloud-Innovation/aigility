@@ -17,6 +17,7 @@ class DashScopeRerankAdapter(BaseRerankAdapter):
     """DashScope Rerank 适配器"""
 
     def __init__(self, config: "RerankConfig"):
+        super().__init__()
         try:
             import dashscope
             self._dashscope = dashscope
@@ -76,6 +77,14 @@ class DashScopeRerankAdapter(BaseRerankAdapter):
 
         results = resp.output["results"]
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
+
+        if hasattr(resp, 'usage') and resp.usage:
+            from ..usage_tracking import TokenUsage
+            self._last_usage = TokenUsage(
+                total_tokens=getattr(resp.usage, 'total_tokens', 0),
+                model=self.model_name,
+            )
+
         return results
 
 
