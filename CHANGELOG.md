@@ -42,6 +42,8 @@
 - 修复 GitHub Actions CI 配置中的 Python 版本解析问题（3.10 被解析为 3.1）
 - 修复 CI 配置中的目录名错误（`aicv` → `aigility`）
 - 修复版本号不一致问题（`__init__.py` 与 `pyproject.toml`）
+- 修复 Python 3.8/3.9 兼容性问题（PDF 库设为可选依赖）
+- 简化测试文件，提高低版本 Python 兼容性
 
 ### 文档
 - 添加全面的使用量跟踪指南
