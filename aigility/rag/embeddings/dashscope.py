@@ -6,15 +6,17 @@ DashScope 嵌入模型适配器
 """
 
 import os
-from typing import List, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from aigility.rag.config import EmbeddingConfig
 
+from ..usage_tracking import TokenUsage
+
 
 class DashScopeEmbeddingAdapter:
     """DashScope 嵌入模型适配器（实现 LangChain Embeddings 接口）"""
-    
+
     def __init__(self, config: "EmbeddingConfig"):
         # 延迟导入 dashscope
         try:
@@ -25,12 +27,13 @@ class DashScopeEmbeddingAdapter:
                 "使用 DashScope 嵌入模型需要安装 dashscope: "
                 "pip install dashscope"
             )
-        
+
         self.config = config
         self.model_name = config.model_name
         self.api_key = config.get_api_key() if hasattr(config, 'get_api_key') else (
             config.api_key or os.getenv("DASHSCOPE_API_KEY")
         )
+        self._last_usage: Optional[TokenUsage] = None
 
     @classmethod
     def load(cls, config: "EmbeddingConfig") -> "DashScopeEmbeddingAdapter":
@@ -45,6 +48,15 @@ class DashScopeEmbeddingAdapter:
             api_key=self.api_key
         )
         if resp.status_code == 200:
+            if hasattr(resp, 'usage') and resp.usage:
+                self._last_usage = TokenUsage(
+                    input_tokens=getattr(resp.usage, 'input_tokens', 0),
+                    total_tokens=(
+                        getattr(resp.usage, 'input_tokens', 0)
+                        + getattr(resp.usage, 'output_tokens', 0)
+                    ),
+                    model=self.model_name,
+                )
             return resp.output['embeddings'][0]['embedding']
         else:
             raise Exception(f"DashScope Embedding Error: {resp.message}")
@@ -57,9 +69,24 @@ class DashScopeEmbeddingAdapter:
             api_key=self.api_key
         )
         if resp.status_code == 200:
+            if hasattr(resp, 'usage') and resp.usage:
+                self._last_usage = TokenUsage(
+                    input_tokens=getattr(resp.usage, 'input_tokens', 0),
+                    total_tokens=(
+                        getattr(resp.usage, 'input_tokens', 0)
+                        + getattr(resp.usage, 'output_tokens', 0)
+                    ),
+                    model=self.model_name,
+                )
             return [item['embedding'] for item in resp.output['embeddings']]
         else:
             raise Exception(f"DashScope Embedding Error: {resp.message}")
+
+    def get_last_usage(self) -> Optional[TokenUsage]:
+        return self._last_usage
+
+    def reset_usage(self):
+        self._last_usage = None
         
     def __call__(self, text: str) -> List[float]:
         """

@@ -7,8 +7,11 @@ import shutil
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, List
+from typing import Callable, Optional, Dict, List
 from collections import defaultdict
+
+from .usage_tracking import UsageStats, TokenUsage, SearchResult, AddFileResult
+from .embeddings.wrapper import EmbeddingWrapper
 
 # 加载 .env 文件
 try:
@@ -71,12 +74,14 @@ class RAGService:
         logging.info(f"🔧 Initializing RAG with: Embedding={self.config.embedding.provider}, Store={self.config.vector_store.provider}")
 
         # 1. 初始化 Embedding 模型
-        self.embedding_model = EmbeddingFactory.get_embedding_model(self.config.embedding)
-        
-        # 2. 初始化 Vector Store (注入 embedding)
+        raw_embedding = EmbeddingFactory.get_embedding_model(self.config.embedding)
+        self.embedding_model = raw_embedding
+        self._embedding_wrapper = EmbeddingWrapper(raw_embedding)
+
+        # 2. 初始化 Vector Store (注入 wrapper 以追踪 usage)
         self.vector_store = VectorStoreFactory.get_vector_store(
             self.config.vector_store,
-            self.embedding_model
+            self._embedding_wrapper
         )
 
         # 2.1 确保 Payload Index 已建立（仅 Qdrant）
@@ -111,6 +116,30 @@ class RAGService:
                 logging.info(f"✅ Rerank 已启用: {self.config.rerank.provider}/{self.config.rerank.model_name}")
             except Exception as e:
                 logging.warning(f"⚠️ Rerank 初始化失败，将跳过 rerank: {e}")
+
+        # 7. Usage 追踪
+        self._total_usage = UsageStats()
+        self._usage_callbacks: List[Callable[[UsageStats], None]] = []
+
+    @property
+    def usage(self) -> UsageStats:
+        """累计 token 用量"""
+        return self._total_usage
+
+    def on_usage(self, callback: Callable[[UsageStats], None]):
+        """注册 usage 回调，每次 API 调用后触发"""
+        self._usage_callbacks.append(callback)
+
+    def reset_usage(self):
+        """重置累计用量"""
+        self._total_usage = UsageStats()
+
+    def _notify_usage(self, usage: UsageStats):
+        for cb in self._usage_callbacks:
+            try:
+                cb(usage)
+            except Exception as e:
+                logging.warning(f"⚠️ Usage callback error: {e}")
 
     def _generate_meta_from_chunks(self, chunks: List, doc_name: str) -> dict:
         """
@@ -244,7 +273,7 @@ class RAGService:
         # 返回前 top_k 个文档
         return [doc for doc, score in scored_docs[:top_k]]
 
-    def add_file(self, file_path: str, auto_build_bm25: bool = True) -> Dict[str, str]:
+    def add_file(self, file_path: str, auto_build_bm25: bool = True) -> AddFileResult:
             """
             加载文件 -> 智能解析 -> 注入上下文元数据 -> 存入向量库
 
@@ -254,11 +283,10 @@ class RAGService:
                                  批量添加文件时建议设为False，最后统一调用build_bm25_index()
 
             Returns:
-                包含文件信息的字典：
-                {
-                    "file_hash": str,     # 基于文件内容的MD5哈希（用于删除操作）
-                    "file_name": str      # 文件名（用于删除操作）
-                }
+                AddFileResult 对象，包含：
+                - file_hash: 基于文件内容的MD5哈希（用于删除操作）
+                - file_name: 文件名（用于删除操作）
+                - usage: 本次操作的 token 用量（embedding tokens）
 
             注意：
                 - 返回的 file_hash 可用于后续的 delete_document 和 restore_document 操作
@@ -356,29 +384,29 @@ class RAGService:
                                 logging.warning(f"⚠️ 更新文件名失败: {e}")
 
                             logging.info(f"✅ 文件恢复成功，跳过重复添加")
-                            return {
-                                "file_hash": file_hash,
-                                "file_name": doc_name
-                            }
+                            return AddFileResult(
+                                file_hash=file_hash,
+                                file_name=doc_name,
+                            )
                         else:
                             logging.warning(f"⚠️ 恢复文件失败，将作为新文件添加: {doc_name}")
                     else:
                         # 文件未删除：仅更新文件名（如果不同）
                         logging.info(f"✅ 文件已存在且未被删除: {doc_name} (hash: {file_hash[:16]}...)")
                         logging.info(f"ℹ️  跳过重复添加， chunks已存在于数据库中")
-                        return {
-                            "file_hash": file_hash,
-                            "file_name": doc_name
-                        }
+                        return AddFileResult(
+                            file_hash=file_hash,
+                            file_name=doc_name,
+                        )
 
                 logging.info(f"📄 Processing file: {doc_name}")
                 chunks = self.ingestion.process_documents(file_path)
 
                 if not chunks:
-                    return {
-                        "file_hash": file_hash,
-                        "file_name": doc_name
-                    }
+                    return AddFileResult(
+                        file_hash=file_hash,
+                        file_name=doc_name,
+                    )
 
                 # ========================================================
                 # 注入元数据 + 上下文扩展
@@ -427,7 +455,18 @@ class RAGService:
                             chunk.metadata["next_buffer"] = ""
 
                 doc_meta = self._generate_meta_from_chunks(chunks, doc_name)
-                self.vector_store.add_documents(chunks)
+
+                # 预计算 embeddings 并追踪 usage，然后通过 context manager 防止向量库重复 embedding
+                texts = [chunk.page_content for chunk in chunks]
+                precomputed_embeddings = self._embedding_wrapper.embed_documents(texts)
+                add_usage = UsageStats(
+                    embedding=self._embedding_wrapper.last_usage or TokenUsage()
+                )
+                self._embedding_wrapper.reset_usage()
+
+                with self._embedding_wrapper.use_precomputed(texts, precomputed_embeddings):
+                    self.vector_store.add_documents(chunks)
+
                 if self.config.ingestion.enable_small2big:
                     logging.info(f"✅ 已添加 {len(chunks)} 个切片 (Small2Big: parent→child)")
                 else:
@@ -441,17 +480,19 @@ class RAGService:
                     except Exception as e:
                         logging.warning(f"⚠️ BM25索引构建失败: {e}")
 
-                # 返回文件信息，用于后续操作
-                return {
-                    "file_hash": file_hash,
-                    "file_name": doc_name
-                }
+                self._total_usage += add_usage
+                self._notify_usage(add_usage)
+
+                return AddFileResult(
+                    file_hash=file_hash,
+                    file_name=doc_name,
+                    usage=add_usage,
+                )
 
             except Exception as e:
                 logging.error(f"❌ Error adding file {file_path}: {str(e)}")
                 raise e
-    def search(self, query: str, expand_context: bool = True, enable_keyword_boost: bool = True) -> str:
-       
+    def search(self, query: str, expand_context: bool = True, enable_keyword_boost: bool = True) -> SearchResult:
         """
         检索并融合上下文（使用BM25混合检索）
 
@@ -465,11 +506,13 @@ class RAGService:
                                  - False: 平衡权重（0.5），适合语义查询
 
         Returns:
-            格式化的检索结果字符串
+            SearchResult 对象，包含 content (str), documents, usage, metadata
 
         示例:
             >>> result = service.search("目标市场")
-            >>> result = service.search("市场策略", enable_keyword_boost=False)"""
+            >>> print(str(result))  # 格式化字符串（向后兼容）
+            >>> print(result.usage.embedding.total_tokens)  # embedding token 消耗
+        """
         try:
             # 根据enable_keyword_boost设置BM25权重
             if enable_keyword_boost:
@@ -482,18 +525,29 @@ class RAGService:
                 semantic_weight = 0.5
 
             # 使用BM25混合检索
-            return self.search_bm25_hybrid(
+            result = self.search_bm25_hybrid(
                 query=query,
                 semantic_weight=semantic_weight,
                 bm25_weight=bm25_weight,
                 expand_context=expand_context
             )
+            self._total_usage += result.usage
+            self._notify_usage(result.usage)
+            return result
 
         except Exception as e:
             logging.error(f"❌ Search failed: {str(e)}")
             # 降级策略：使用纯语义检索
             docs = self._search_with_filter(query, k=self.config.search_top_k)
-            return self._format_search_results(docs, expand_context)
+            content = self._format_search_results(docs, expand_context)
+            fallback_usage = UsageStats(
+                embedding=self._embedding_wrapper.last_usage or TokenUsage()
+            )
+            self._embedding_wrapper.reset_usage()
+            result = SearchResult(content=content, documents=docs, usage=fallback_usage)
+            self._total_usage += fallback_usage
+            self._notify_usage(fallback_usage)
+            return result
 
     def clear_knowledge_base(self):
         """(危险操作) 清空知识库"""
@@ -1077,7 +1131,7 @@ class RAGService:
         semantic_weight: float = 0.6,
         bm25_weight: float = 0.4,
         expand_context: bool = True
-    ) -> str:
+    ) -> SearchResult:
         """
         BM25混合检索：结合语义检索和关键词检索
 
@@ -1092,14 +1146,16 @@ class RAGService:
             expand_context: 是否扩展上下文（默认True）
 
         Returns:
-            检索结果字符串
+            SearchResult 对象，包含 content, documents, usage, metadata
 
         使用示例：
-            >>> service.build_bm25_index()  # 首次使用前构建索引
+            >>> service.build_bm25_index()
             >>> result = service.search_bm25_hybrid("目标市场")
-            >>> # 对于精确查询，可以增加BM25权重
-            >>> result = service.search_bm25_hybrid("目标市场", bm25_weight=0.7)
+            >>> print(str(result))
+            >>> print(result.usage.embedding.total_tokens)
         """
+        search_usage = UsageStats()
+
         try:
             # 确保BM25索引已构建
             if not self._bm25_built:
@@ -1108,15 +1164,24 @@ class RAGService:
 
             # 1. 语义检索
             semantic_docs = self._search_with_filter(query, k=self.config.search_top_k * 3)
+            if self._embedding_wrapper.last_usage:
+                search_usage.embedding = search_usage.embedding + self._embedding_wrapper.last_usage
+                self._embedding_wrapper.reset_usage()
+
             if not semantic_docs:
-                return ""
+                return SearchResult(content="", documents=[], usage=search_usage)
 
             # 2. BM25检索
             bm25_results = self._bm25_search(query, top_k=self.config.search_top_k * 3)
             if not bm25_results:
                 # BM25无结果，降级到纯语义检索
                 logging.warning("⚠️ BM25检索无结果，使用纯语义检索")
-                return self._format_search_results(semantic_docs, expand_context)
+                content = self._format_search_results(semantic_docs, expand_context)
+                return SearchResult(
+                    content=content,
+                    documents=semantic_docs,
+                    usage=search_usage,
+                )
 
             # 3. RRF (Reciprocal Rank Fusion) 融合
             import hashlib
@@ -1149,7 +1214,6 @@ class RAGService:
             sorted_doc_ids = sorted(doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True)
 
             # Small2Big 模式下多取一些 child chunks，避免去重后结果不足
-            # 检测是否启用了 small-to-big（通过检查第一个文档是否有 parent_chunk_id）
             sample_doc = all_docs_dict.get(sorted_doc_ids[0]) if sorted_doc_ids else None
             is_small2big = sample_doc and sample_doc.metadata.get("parent_chunk_id")
             fetch_count = self.config.search_top_k * 3 if is_small2big else self.config.search_top_k
@@ -1158,22 +1222,39 @@ class RAGService:
             # 4. Rerank 重排序（可选）
             if self._reranker and final_docs:
                 try:
-                    # Small2Big 时 rerank 多取一些，避免去重后不足
                     top_n = self.config.rerank.top_n or (self.config.search_top_k * 3 if is_small2big else self.config.search_top_k)
                     final_docs = self._reranker.rerank_documents(
                         query, final_docs, top_n=top_n
                     )
+                    if self._reranker.last_usage:
+                        search_usage.rerank = search_usage.rerank + self._reranker.last_usage
+                        self._reranker.reset_usage()
                     logging.info(f"✅ Rerank 完成，保留 {len(final_docs)} 个文档")
                 except Exception as e:
                     logging.warning(f"⚠️ Rerank 失败，使用原始排序: {e}")
 
-            return self._format_search_results(final_docs, expand_context)
+            content = self._format_search_results(final_docs, expand_context)
+            return SearchResult(
+                content=content,
+                documents=final_docs,
+                usage=search_usage,
+                metadata={
+                    "semantic_weight": semantic_weight,
+                    "bm25_weight": bm25_weight,
+                    "doc_count": len(final_docs),
+                },
+            )
 
         except Exception as e:
             logging.error(f"❌ BM25混合检索失败: {e}")
             # 降级到纯语义检索
             semantic_docs = self._search_with_filter(query, k=self.config.search_top_k)
-            return self._format_search_results(semantic_docs, expand_context)
+            content = self._format_search_results(semantic_docs, expand_context)
+            return SearchResult(
+                content=content,
+                documents=semantic_docs,
+                usage=search_usage,
+            )
 
     def _format_search_results(self, docs: List, expand_context: bool) -> str:
         """

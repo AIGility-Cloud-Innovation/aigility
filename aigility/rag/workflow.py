@@ -79,8 +79,9 @@ def create_rag_workflow(
         query = state["query"]
 
         # 使用 RAGService 的 search 方法进行检索
-        # RAGService.search() 返回格式化的字符串，包含多个文档切片
-        documents_text = rag_service.search(query)
+        # RAGService.search() 返回 SearchResult 对象
+        search_result = rag_service.search(query)
+        documents_text = str(search_result)
 
         # 将结果分割成文档列表（按引用标记分割）
         documents = []

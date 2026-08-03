@@ -8,9 +8,21 @@ from typing import List, Optional
 
 from langchain_core.documents import Document
 
+from ..usage_tracking import TokenUsage
+
 
 class BaseRerankAdapter(ABC):
     """Rerank 适配器基类"""
+
+    def __init__(self):
+        self._last_usage: Optional[TokenUsage] = None
+
+    @property
+    def last_usage(self) -> Optional[TokenUsage]:
+        return self._last_usage
+
+    def reset_usage(self):
+        self._last_usage = None
 
     @abstractmethod
     def rerank(

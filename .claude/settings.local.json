@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/qyd/Desktop/qyd_ALLFile/Code/reachAI_custom_fastapi/app/modules/chatflow/services/**)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Bash(python:*)",
+      "Bash(python3)",
+      "Bash(python3 -c ' *)",
+      "Bash(networksetup -getwebproxy Wi-Fi)",
+      "Bash(networksetup -getsecurewebproxy Wi-Fi)",
+      "Bash(networksetup -getsocksfirewallproxy Wi-Fi)",
+      "Bash(/Applications/anaconda/anaconda3/envs/aigility/bin/python)",
+      "Bash(/Applications/anaconda/anaconda3/envs/reachai/bin/python -c ' *)",
+      "Bash(/Applications/anaconda/anaconda3/envs/reachai/bin/python rag_retrieval_eval.py --direct --test-file ragas_test_cases_gaoyang_textile_cn.csv)",
+      "Bash(python3 -c \"from aigility.rag.config import PayloadIndexConfig, PayloadIndexField, VectorStoreConfig; print\\('Import OK'\\); c = PayloadIndexConfig\\(\\); print\\(f'Default fields: {len\\(c.fields\\)}'\\); print\\(f'Field schema map: {list\\(c.get_field_schema_map\\(\\).keys\\(\\)\\)}'\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('./aigility/rag/service.py', doraise=True\\); print\\('service.py syntax OK'\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('./aigility/rag/config.py', doraise=True\\); print\\('config.py syntax OK'\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('./aigility/rag/vector_stores/qdrant.py', doraise=True\\); print\\('qdrant.py syntax OK'\\)\")",
+      "Read(//Users/qyd/**)",
+      "Read(//Applications/**)",
+      "Read(//Users/qyd/.conda/**)",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('./aigility/rag/markdown_splitter.py', doraise=True\\); print\\('markdown_splitter.py OK'\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('./aigility/rag/service.py', doraise=True\\); print\\('service.py OK'\\)\")",
+      "Bash(python3 -c \"import py_compile; py_compile.compile\\('./aigility/rag/config.py', doraise=True\\); print\\('config.py OK'\\)\")",
+      "Bash(mv retrieval_eval_optimized_details.csv retrieval_eval_opti_v1_details.csv)",
+      "Bash(mv retrieval_eval_optimized_summary.json retrieval_eval_opti_v1_summary.json)",
+      "Bash(conda env *)"
+    ]
+  }
+}
