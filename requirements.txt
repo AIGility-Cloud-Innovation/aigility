@@ -34,3 +34,6 @@ rank_bm25>=0.2.0
 # Markdown AST 解析（用于智能文档切分）
 markdown-it-py>=3.0.0
 dashscope>=0.1.0
+
+# PDF 解析（可选）
+pypdf>=3.0.0

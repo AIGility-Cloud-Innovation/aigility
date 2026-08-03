@@ -17,7 +17,11 @@ from hashlib import md5
 import pandas as pd
 
 # 轻量级依赖
-import pdfplumber
+try:
+    import pdfplumber
+    HAS_PDFPLUMBER = True
+except ImportError:
+    HAS_PDFPLUMBER = False
 from docx import Document as DocxDocument
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -128,8 +132,12 @@ class IngestionManager:
         1. 表格: 提取并转为 Markdown 格式，保留结构。
         2. 文本: 尝试基于坐标聚类 (虽然不如 DeepDoc 准确，但比 pypdf 强)。
         """
+        if not HAS_PDFPLUMBER:
+            logging.warning("pdfplumber not installed, falling back to basic PDF parsing")
+            return self._parse_pdf_basic(file_path)
+
         full_text_pages = []
-        
+
         with pdfplumber.open(file_path) as pdf:
             for page in pdf.pages:
                 page_content = []
@@ -447,6 +455,27 @@ class IngestionManager:
                 unique_docs.append(doc)
         
         return unique_docs
+
+    def _parse_pdf_basic(self, file_path: str) -> List[str]:
+        """
+        基本 PDF 解析（当 pdfplumber 不可用时使用）
+        尝试使用 pypdf，如果不可用则返回空列表
+        """
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text.strip())
+            return pages
+        except ImportError:
+            logging.warning("No PDF library installed. Install pdfplumber or pypdf for PDF support: pip install pypdf")
+            return []
+        except Exception as e:
+            logging.error(f"Error loading {file_path}: {e}")
+            return []
 
 __all__ = ["IngestionManager"]
 
