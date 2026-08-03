@@ -22,7 +22,13 @@ try:
     HAS_PDFPLUMBER = True
 except ImportError:
     HAS_PDFPLUMBER = False
-from docx import Document as DocxDocument
+
+try:
+    from docx import Document as DocxDocument
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
+
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -240,6 +246,10 @@ class IngestionManager:
         策略: 区分段落和表格。
         docx_parser.py 会尝试提取表格并线性化。
         """
+        if not HAS_DOCX:
+            logging.warning("python-docx not installed, skipping docx parsing. Install with: pip install python-docx")
+            return []
+
         doc = DocxDocument(file_path)
         full_text = []
         
