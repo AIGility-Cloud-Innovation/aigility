@@ -28,6 +28,7 @@
   - 添加发布配置文件
   - 增强 `.gitignore` 设置
   - 添加 Claude 开发配置
+  - 新增 AIGility 模块单元测试 (`tests/test_aigility.py`)
 
 ### 变更
 - 更新 RAG 服务，增强 token 跟踪和监控功能
@@ -38,10 +39,14 @@
 ### 修复
 - 修复文本处理中的列表切分问题
 - 改进元数据处理和 payload 处理
+- 修复 GitHub Actions CI 配置中的 Python 版本解析问题（3.10 被解析为 3.1）
+- 修复 CI 配置中的目录名错误（`aicv` → `aigility`）
+- 修复版本号不一致问题（`__init__.py` 与 `pyproject.toml`）
 
 ### 文档
 - 添加全面的使用量跟踪指南
 - 更新项目文档结构
+- 添加中文变更日志
 
 ---
 
