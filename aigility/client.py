@@ -48,8 +48,8 @@ class ADKClient:
     ) -> ChatAgent:
         """创建对话智能体"""
         from .chat import create_chat_agent
-        return create_chat_agent(name=name, **kwargs)
-    
+        return create_chat_agent(name=name, adk_config=self.config, **kwargs)
+
     def create_chatflow(
         self,
         name: str,
@@ -57,7 +57,7 @@ class ADKClient:
     ) -> ChatFlow:
         """创建对话流"""
         from .chatflow import create_chatflow
-        return create_chatflow(name=name, **kwargs)
+        return create_chatflow(name=name, adk_config=self.config, **kwargs)
     
     def create_workflow(
         self,

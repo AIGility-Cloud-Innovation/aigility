@@ -1,37 +1,10 @@
 """
 LLM 模型提供者
 
-提供统一的 LLM 接口，支持多种 LLM 提供商。
+提供统一的 LLM 创建入口，内部转发到 ModelFactory。
 """
 
-from typing import Optional, Dict, Any, List
-from abc import ABC, abstractmethod
-
-
-class LLMProvider(ABC):
-    """LLM 提供者基类"""
-    
-    @abstractmethod
-    async def generate(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        **kwargs
-    ) -> str:
-        """生成文本"""
-        pass
-    
-    @abstractmethod
-    async def stream(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        **kwargs
-    ):
-        """流式生成文本"""
-        pass
+from typing import Optional, Any
 
 
 def create_llm(
@@ -40,22 +13,32 @@ def create_llm(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     **kwargs
-) -> LLMProvider:
+) -> Any:
     """
-    创建 LLM 提供者
-    
+    创建 LLM 实例（便捷函数）
+
+    内部构造 ADKConfig 并转发到 ModelFactory.create_llm()。
+
     Args:
-        provider: 提供者名称 (openai, anthropic, etc.)
+        provider: 提供商名称 ("openai", "deepseek" 等)
         model: 模型名称
         api_key: API 密钥
-        base_url: API 基础 URL
-        **kwargs: 其他参数
-        
+        base_url: API Base URL
+        **kwargs: 额外参数（temperature, max_tokens 等）
+
     Returns:
-        LLM 提供者实例
+        LangChain LLM 实例（如 ChatOpenAI）
     """
-    # TODO: 实现具体的 LLM 提供者
-    # 这里需要根据 provider 参数创建对应的实例
-    # 可以使用 langchain 的 LLM 类
-    raise NotImplementedError("LLM provider creation not yet implemented")
+    from ..core.config import ADKConfig
+    from ..core.model_factory import ModelFactory
+
+    config = ADKConfig(
+        llm_provider=provider,
+        llm_model=model,
+        llm_api_key=api_key,
+        llm_base_url=base_url,
+        llm_temperature=kwargs.get("temperature", 0.7),
+        llm_max_tokens=kwargs.get("max_tokens", 2000),
+    )
+    return ModelFactory.create_llm(config)
 

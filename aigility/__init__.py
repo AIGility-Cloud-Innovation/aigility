@@ -15,7 +15,7 @@ __email__ = "contact@aigility.com"
 __description__ = "Agent Development Kit - 智能体开发框架"
 
 # 导入主客户端
-from .client import ADKClient, create_client
+from .client import ADKClient, ADKClientBuilder, create_client
 
 # 导入各模块
 from . import memory
@@ -27,6 +27,7 @@ from . import rag
 __all__ = [
     # 主客户端
     "ADKClient",
+    "ADKClientBuilder",
     "create_client",
 
     # 模块

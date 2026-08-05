@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import aigility; print\\(aigility.__version__\\); print\\(aigility.__file__\\)\")"
+    ]
+  }
+}
