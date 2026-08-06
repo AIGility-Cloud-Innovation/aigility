@@ -1,6 +1,6 @@
 # Aigility SDK (ADK) 使用文档
 
-> **版本：** 0.1.3 | **维护方：** AIGility Cloud Innovation
+> **版本：** 2.0.0 | **维护方：** AIGility Cloud Innovation
 >
 > 本文档面向 SDK 使用者，详细说明 `aigility` 包的架构设计、各模块功能、使用方式及当前实现状态。
 

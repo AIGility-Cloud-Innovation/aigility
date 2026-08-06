@@ -24,7 +24,7 @@ class TestAIGilityImport:
         """测试版本号"""
         import aigility
         assert hasattr(aigility, '__version__')
-        assert aigility.__version__ == '0.1.3'
+        assert aigility.__version__ == '2.0.0'
 
     def test_import_rag_module(self):
         """测试导入 RAG 模块"""

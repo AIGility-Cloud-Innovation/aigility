@@ -12,7 +12,7 @@ AIGility ADK - Agent Development Kit
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-__version__ = "0.1.3"
+__version__ = "2.0.0"
 __author__ = "AIGility Cloud Innovation"
 __email__ = "contact@aigility.com"
 __description__ = "Agent Development Kit - 智能体开发框架"
