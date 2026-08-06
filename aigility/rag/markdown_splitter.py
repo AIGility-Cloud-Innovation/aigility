@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # markdown_splitter.py
 """
 基于 Markdown AST 的智能切分器
@@ -9,19 +11,14 @@
 """
 
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple
 from langchain_core.documents import Document
 
-try:
+from .._optional import import_optional
+
+if TYPE_CHECKING:
     from markdown_it import MarkdownIt
     from markdown_it.token import Token
-    MARKDOWN_IT_AVAILABLE = True
-except ImportError:
-    MARKDOWN_IT_AVAILABLE = False
-    raise ImportError(
-        "markdown-it-py is required for AST-based splitting. "
-        "Install it with: pip install markdown-it-py"
-    )
 
 
 class MarkdownASTSplitter:
@@ -71,8 +68,13 @@ class MarkdownASTSplitter:
         self.child_chunk_size = child_chunk_size
         self.child_chunk_overlap = child_chunk_overlap
 
-        # 初始化 markdown-it 解析器，启用表格插件
-        self.md = MarkdownIt().enable('table')
+        markdown_it = import_optional(
+            "markdown_it",
+            feature="Markdown AST splitting",
+            extra="doc-markdown",
+            dependency="markdown-it-py",
+        )
+        self.md = markdown_it.MarkdownIt().enable('table')
 
     def split_text(self, text: str) -> List[str]:
         """

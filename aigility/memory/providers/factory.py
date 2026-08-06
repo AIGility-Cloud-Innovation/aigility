@@ -4,13 +4,7 @@ Memory Provider 工厂类
 根据配置动态创建不同的 Provider 实例。
 """
 
-import logging
-from typing import Union
-
 from .base import BaseMemoryProvider
-from .timem import TimemMemoryProvider
-
-logger = logging.getLogger(__name__)
 
 
 class MemoryProviderFactory:
@@ -37,6 +31,8 @@ class MemoryProviderFactory:
         provider_type = config.provider
 
         if provider_type == "timem":
+            from .timem import TimemMemoryProvider
+
             return TimemMemoryProvider(config)
         elif provider_type == "custom":
             # 预留给用户自定义 Provider

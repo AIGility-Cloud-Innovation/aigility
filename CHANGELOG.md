@@ -5,6 +5,21 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 变更
+
+- 基础导入不再提前加载 RAG、文档解析、NLP 或 TiMEM 等可选依赖。
+- `RAGService()` 仅在显式构造时从当前工作目录向上查找并加载 `.env`；已有环境变量优先。
+- 显式启用的 Memory Provider、Rerank 和文档解析在缺少依赖或必需配置时立即报错。
+- 文档摄取明确不支持旧 `.doc` 和 `.xls`，需先转换为 `.docx` 和 `.xlsx`。
+- `timem` extra 用于 TiMEM Memory Provider SDK；`timem-rag` 保留为 TiMEM RAG 完整功能组合。
+- DashScope Embedding 与 Rerank 分别由对应 extra 安装 `dashscope>=1.16.0`，并纳入 `all` 完整功能组合。
+
+### 修复
+
+- 修复仅安装核心包时，公共导入路径仍可触发可选依赖加载的问题。
+
 ## [0.1.3] - 2026-05-27
 
 ### 新增

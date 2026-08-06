@@ -1,9 +1,10 @@
 # ============================================================
-# AIGility 完整依赖 (Full Dependencies)
+# AIGility Python 3.13 完整依赖快照 (Full Dependency Snapshot)
 # ============================================================
-# 这个文件包含 AIGility 的所有依赖，包括 RAG 功能
-# 注意: 安装时间较长，包含 torch (>2GB) 等大型依赖
-# 推荐使用: pip install "aigility[all]" 代替
+# 这是特定 Python 3.13 环境的历史快照，仅用于重现该环境。
+# 它不是 Python 3.9-3.13 的跨版本安装契约，也不是发布依赖的真值源。
+# 新安装应使用 pyproject.toml extras: pip install "aigility[all]"
+# 注意: 安装时间较长，包含 torch (>2GB) 等大型依赖。
 # ============================================================
 
 aiohappyeyeballs==2.6.1
@@ -117,4 +118,4 @@ zai-sdk==0.2.1
 zstandard==0.25.0
 rank_bm25
 markdown-it-py>=3.0.0
-dashscope>=0.1.0
+dashscope>=1.16.0

@@ -14,32 +14,11 @@ import re
 import logging
 from typing import List, Dict, Any, Optional
 from hashlib import md5
-import pandas as pd
-
-# 轻量级依赖
-try:
-    import pdfplumber
-    HAS_PDFPLUMBER = True
-except ImportError:
-    HAS_PDFPLUMBER = False
-
-try:
-    from docx import Document as DocxDocument
-    HAS_DOCX = True
-except ImportError:
-    HAS_DOCX = False
 
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from .._optional import MissingOptionalDependencyError, import_optional
 from .config import IngestionConfig
-
-# 尝试导入 Markdown AST 切分器
-try:
-    from .markdown_splitter import MarkdownASTSplitter
-    MARKDOWN_AST_AVAILABLE = True
-except ImportError:
-    MARKDOWN_AST_AVAILABLE = False
 
 class IngestionManager:
     """通用文档解析与切分管理器"""
@@ -47,33 +26,22 @@ class IngestionManager:
     def __init__(self, config: IngestionConfig):
         self.config = config
         self._fallback_splitter = None
+        self._ast_splitter = None
+        self._ast_checked = False
 
         self.duplicate_cache: Dict[str, set] = {}
-
-        # 默认使用 AST 切分器（如果可用）
-        if MARKDOWN_AST_AVAILABLE:
-            self._ast_splitter = MarkdownASTSplitter(
-                chunk_size=config.chunk_size,
-                chunk_overlap=config.chunk_overlap,
-                context_buffer_size=config.context_buffer_size,
-                min_chunk_size=config.min_chunk_length,
-                enable_small2big=config.enable_small2big,
-                parent_chunk_size=config.parent_chunk_size,
-                child_chunk_size=config.child_chunk_size,
-                child_chunk_overlap=config.child_chunk_overlap,
-            )
-            self._use_ast = True
-            print("✅ 使用 Markdown AST 切分器（保持标题-内容关联）")
-        else:
-            self._ast_splitter = None
-            self._use_ast = False
-            print("⚠️ markdown-it-py 未安装，降级使用传统切分器")
 
     @property
     def splitter(self):
         """获取兜底的传统切分器"""
         if self._fallback_splitter is None:
-            self._fallback_splitter = RecursiveCharacterTextSplitter(
+            splitters = import_optional(
+                "langchain_text_splitters",
+                feature="RAG text splitting",
+                extra="rag",
+                dependency="langchain-text-splitters",
+            )
+            self._fallback_splitter = splitters.RecursiveCharacterTextSplitter(
                 chunk_size=self.config.chunk_size,
                 chunk_overlap=self.config.chunk_overlap,
                 separators=[
@@ -92,6 +60,32 @@ class IngestionManager:
             )
         return self._fallback_splitter
 
+    def _get_ast_splitter(self):
+        """Load the optional Markdown AST splitter on first processing use."""
+        if self._ast_checked:
+            return self._ast_splitter
+
+        try:
+            from .markdown_splitter import MarkdownASTSplitter
+
+            self._ast_splitter = MarkdownASTSplitter(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap,
+                context_buffer_size=self.config.context_buffer_size,
+                min_chunk_size=self.config.min_chunk_length,
+                enable_small2big=self.config.enable_small2big,
+                parent_chunk_size=self.config.parent_chunk_size,
+                child_chunk_size=self.config.child_chunk_size,
+                child_chunk_overlap=self.config.child_chunk_overlap,
+            )
+        except MissingOptionalDependencyError:
+            logging.debug(
+                "markdown-it-py is unavailable; using the standard RAG splitter"
+            )
+            self._ast_splitter = None
+        self._ast_checked = True
+        return self._ast_splitter
+
     def load_file(self, file_path: str) -> List[Document]:
         """统一入口：根据文件类型分发处理逻辑"""
         if not os.path.exists(file_path):
@@ -100,36 +94,36 @@ class IngestionManager:
         ext = os.path.splitext(file_path)[-1].lower()
         file_name = os.path.basename(file_path)
         
-        try:
-            if ext == ".pdf":
-                texts = self._parse_pdf_smart(file_path)
-            elif ext in [".xlsx", ".xls", ".csv"]:
-                texts = self._parse_excel_semantic(file_path, ext)
-            elif ext in [".docx", ".doc"]:
-                texts = self._parse_docx_struct(file_path)
-            elif ext in [".txt", ".md"]:
-                texts = self._parse_txt(file_path)
-            else:
-                raise ValueError(f"Unsupported file type: {ext}")
-            
-            # 封装为 Document 对象
-            docs = []
-            for i, text in enumerate(texts):
-                if not text.strip():
-                    continue
-                docs.append(Document(
-                    page_content=text,
-                    metadata={
+        if ext == ".pdf":
+            texts = self._parse_pdf_smart(file_path)
+        elif ext in [".xlsx", ".csv"]:
+            texts = self._parse_excel_semantic(file_path, ext)
+        elif ext == ".docx":
+            texts = self._parse_docx_struct(file_path)
+        elif ext in [".txt", ".md"]:
+            texts = self._parse_txt(file_path)
+        elif ext in [".xls", ".doc"]:
+            raise ValueError(
+                f"Legacy file type {ext} is not supported; convert it to "
+                f"{'.xlsx' if ext == '.xls' else '.docx'} first."
+            )
+        else:
+            raise ValueError(f"Unsupported file type: {ext}")
+
+        docs = []
+        for i, text in enumerate(texts):
+            if not text.strip():
+                continue
+            docs.append(Document(
+                page_content=text,
+                metadata={
                     "file_path": file_path,
-                        "file_name": file_name,
+                    "file_name": file_name,
                     "file_type": ext,
-                        "chunk_index": i
-                    }
-                ))
-            return docs
-        except Exception as e:
-            logging.error(f"Error loading {file_path}: {e}")
-            return []
+                    "chunk_index": i
+                }
+            ))
+        return docs
 
     def _parse_pdf_smart(self, file_path: str) -> List[str]:
         """
@@ -138,9 +132,11 @@ class IngestionManager:
         1. 表格: 提取并转为 Markdown 格式，保留结构。
         2. 文本: 尝试基于坐标聚类 (虽然不如 DeepDoc 准确，但比 pypdf 强)。
         """
-        if not HAS_PDFPLUMBER:
-            logging.warning("pdfplumber not installed, falling back to basic PDF parsing")
-            return self._parse_pdf_basic(file_path)
+        pdfplumber = import_optional(
+            "pdfplumber",
+            feature="PDF parsing",
+            extra="doc-pdf",
+        )
 
         full_text_pages = []
 
@@ -203,41 +199,47 @@ class IngestionManager:
         这对 Text-to-SQL 或基于数据的问答至关重要，因为普通的文本切分会把表头和数值切开。
         """
         docs = []
-        try:
-            if ext == ".csv":
-                df = pd.read_csv(file_path)
-            else:
-                # 仅读取第一个 sheet，或者遍历所有 sheets
-                dfs = pd.read_excel(file_path, sheet_name=None)
-                # 展平所有 sheet
-                df = pd.concat(dfs.values(), ignore_index=True)
+        pd = import_optional(
+            "pandas",
+            feature="Excel and CSV parsing",
+            extra="doc-excel",
+        )
+        if ext == ".csv":
+            df = pd.read_csv(file_path)
+        else:
+            import_optional(
+                "openpyxl",
+                feature="Excel parsing",
+                extra="doc-excel",
+            )
+            # 仅读取第一个 sheet，或者遍历所有 sheets
+            dfs = pd.read_excel(file_path, sheet_name=None)
+            # 展平所有 sheet
+            df = pd.concat(dfs.values(), ignore_index=True)
 
-            # 数据清洗
-            df = df.fillna("")
+        # 数据清洗
+        df = df.fillna("")
             
-            # 序列化逻辑，参考 excel_parser.py 的 __call__ 方法
-            # 格式: "列名1: 值1; 列名2: 值2..."
-            text_rows = []
-            columns = df.columns.tolist()
+        # 序列化逻辑，参考 excel_parser.py 的 __call__ 方法
+        # 格式: "列名1: 值1; 列名2: 值2..."
+        text_rows = []
+        columns = df.columns.tolist()
             
-            for _, row in df.iterrows():
-                row_parts = []
-                for col in columns:
-                    val = str(row[col]).strip()
-                    if val:
-                        row_parts.append(f"{col}: {val}")
-                if row_parts:
-                    text_rows.append("; ".join(row_parts))
+        for _, row in df.iterrows():
+            row_parts = []
+            for col in columns:
+                val = str(row[col]).strip()
+                if val:
+                    row_parts.append(f"{col}: {val}")
+            if row_parts:
+                text_rows.append("; ".join(row_parts))
             
-            # Excel 数据通常密集，每 X 行作为一个 chunk，避免 token 溢出
-            batch_size = 20 # 假设每行 50 tokens，20 行约 1000 tokens
-            for i in range(0, len(text_rows), batch_size):
-                batch = text_rows[i:i+batch_size]
-                docs.append("\n".join(batch))
-                
-        except Exception as e:
-            logging.error(f"Error parsing Excel: {e}")
-            
+        # Excel 数据通常密集，每 X 行作为一个 chunk，避免 token 溢出
+        batch_size = 20 # 假设每行 50 tokens，20 行约 1000 tokens
+        for i in range(0, len(text_rows), batch_size):
+            batch = text_rows[i:i+batch_size]
+            docs.append("\n".join(batch))
+
         return docs
 
     def _parse_docx_struct(self, file_path: str) -> List[str]:
@@ -246,11 +248,13 @@ class IngestionManager:
         策略: 区分段落和表格。
         docx_parser.py 会尝试提取表格并线性化。
         """
-        if not HAS_DOCX:
-            logging.warning("python-docx not installed, skipping docx parsing. Install with: pip install python-docx")
-            return []
-
-        doc = DocxDocument(file_path)
+        docx = import_optional(
+            "docx",
+            feature="Word document parsing",
+            extra="doc-word",
+            dependency="python-docx",
+        )
+        doc = docx.Document(file_path)
         full_text = []
         
         # python-docx 的 iter_block_items 逻辑需要自行实现来保持顺序
@@ -412,11 +416,12 @@ class IngestionManager:
         # 4. 切分 (默认使用 AST 切分器，保持标题-内容关联)
         logging.info(f"🔧 切分配置: chunk_size={self.config.chunk_size}, chunk_overlap={self.config.chunk_overlap}")
 
-        if self._use_ast:
+        ast_splitter = self._get_ast_splitter()
+        if ast_splitter is not None:
             if self.config.enable_small2big:
-                split_docs = self._ast_splitter.split_documents_small2big(cleaned_docs)
+                split_docs = ast_splitter.split_documents_small2big(cleaned_docs)
             else:
-                split_docs = self._ast_splitter.split_documents(cleaned_docs)
+                split_docs = ast_splitter.split_documents(cleaned_docs)
         else:
             split_docs = self.splitter.split_documents(cleaned_docs)
         
@@ -466,26 +471,4 @@ class IngestionManager:
         
         return unique_docs
 
-    def _parse_pdf_basic(self, file_path: str) -> List[str]:
-        """
-        基本 PDF 解析（当 pdfplumber 不可用时使用）
-        尝试使用 pypdf，如果不可用则返回空列表
-        """
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(file_path)
-            pages = []
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    pages.append(text.strip())
-            return pages
-        except ImportError:
-            logging.warning("No PDF library installed. Install pdfplumber or pypdf for PDF support: pip install pypdf")
-            return []
-        except Exception as e:
-            logging.error(f"Error loading {file_path}: {e}")
-            return []
-
 __all__ = ["IngestionManager"]
-

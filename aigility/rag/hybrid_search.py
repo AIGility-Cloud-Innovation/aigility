@@ -5,14 +5,6 @@ import logging
 from typing import List, Optional
 from collections import defaultdict
 
-# 尝试导入 BM25 相关依赖
-try:
-    from rank_bm25 import BM25Okapi
-    HAS_BM25 = True
-except ImportError:
-    HAS_BM25 = False
-    logging.warning("⚠️ 未安装 rank_bm25，将使用简化的关键词匹配")
-
 
 class EnhancedSearch:
     """增强的检索功能"""

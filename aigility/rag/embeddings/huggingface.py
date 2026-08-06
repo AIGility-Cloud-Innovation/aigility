@@ -5,7 +5,10 @@ HuggingFace 嵌入模型适配器
 使用前需要安装: pip install sentence-transformers langchain-huggingface
 """
 
+import os
 from typing import List, Optional, TYPE_CHECKING
+
+from ..._optional import import_optional
 
 if TYPE_CHECKING:
     from langchain_core.embeddings import Embeddings
@@ -18,14 +21,13 @@ class HuggingFaceEmbeddingAdapter:
     """HuggingFace 嵌入模型适配器（实现 LangChain Embeddings 接口）"""
 
     def __init__(self, config: "EmbeddingConfig"):
-        # 延迟导入
-        try:
-            from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-        except ImportError:
-            raise ImportError(
-                "使用 HuggingFace 嵌入模型需要安装: "
-                "pip install sentence-transformers langchain-huggingface"
-            )
+        embeddings = import_optional(
+            "langchain_huggingface.embeddings",
+            feature="HuggingFace embeddings",
+            extra="embedding-huggingface",
+            dependency="langchain-huggingface",
+        )
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
         self.config = config
 
@@ -36,7 +38,7 @@ class HuggingFaceEmbeddingAdapter:
         }
 
         # 直接返回 LangChain 的原生 Embeddings 对象，而不是包装它
-        self._embedding = HuggingFaceEmbeddings(
+        self._embedding = embeddings.HuggingFaceEmbeddings(
             model_name=config.model_name,
             **kwargs
         )
@@ -45,13 +47,13 @@ class HuggingFaceEmbeddingAdapter:
     @classmethod
     def load(cls, config: "EmbeddingConfig"):
         """工厂类调用的加载方法 - 直接返回 LangChain 原生对象"""
-        try:
-            from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-        except ImportError:
-            raise ImportError(
-                "使用 HuggingFace 嵌入模型需要安装: "
-                "pip install sentence-transformers langchain-huggingface"
-            )
+        embeddings = import_optional(
+            "langchain_huggingface.embeddings",
+            feature="HuggingFace embeddings",
+            extra="embedding-huggingface",
+            dependency="langchain-huggingface",
+        )
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
         # 处理默认参数
         kwargs = config.kwargs or {
@@ -60,7 +62,7 @@ class HuggingFaceEmbeddingAdapter:
         }
 
         # 直接返回 LangChain 原生对象，不包装
-        return HuggingFaceEmbeddings(
+        return embeddings.HuggingFaceEmbeddings(
             model_name=config.model_name,
             **kwargs
         )

@@ -1,17 +1,16 @@
-name: Publish to PyPI
+name: Test and Publish
 
 on:
+  pull_request:
   push:
     tags:
       - "v*"
   workflow_dispatch:
 
 jobs:
-  publish:
+  build-artifacts:
+    name: Build release artifacts once
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
       - name: Checkout repository
@@ -22,16 +21,302 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install build dependencies
+      - name: Build wheel and source distribution
         run: |
           python -m pip install --upgrade pip
-          pip install build
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+          test "$(find dist -maxdepth 1 -name '*.whl' | wc -l)" -eq 1
+          test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 1
 
-      - name: Build package
-        run: python -m build
+      - name: Upload immutable release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/v')
+  source-contract:
+    name: Source dependency contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install source and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run core tests without optional integrations
+        run: >-
+          python -m pytest
+          -m "not integration and not optional_timem and not optional_dashscope and not optional_doc_pdf and not optional_doc_word and not optional_doc_excel and not optional_doc_markdown and not optional_rag"
+
+  core-artifact:
+    name: Core wheel / Python ${{ matrix.python-version }}
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download the built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist
+
+      - name: Install and smoke-test the same core wheel
+        run: |
+          WHEELS=("$GITHUB_WORKSPACE"/dist/*.whl)
+          test "${#WHEELS[@]}" -eq 1
+          VENV_PATH="$RUNNER_TEMP/aigility-core-${{ matrix.python-version }}"
+          python -m venv "$VENV_PATH"
+          "$VENV_PATH/bin/python" -m pip install --upgrade pip
+          "$VENV_PATH/bin/python" -m pip install "${WHEELS[0]}"
+          "$VENV_PATH/bin/python" -m pip check
+          SMOKE_DIR=$(mktemp -d "$RUNNER_TEMP/aigility-core-smoke.XXXXXX")
+          cd "$SMOKE_DIR"
+          "$VENV_PATH/bin/python" "$GITHUB_WORKSPACE/tests/wheel_smoke.py"
+
+  sdist-artifact:
+    name: Source distribution smoke
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download the built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist
+
+      - name: Install and smoke-test the source distribution
+        run: |
+          SDISTS=("$GITHUB_WORKSPACE"/dist/*.tar.gz)
+          test "${#SDISTS[@]}" -eq 1
+          VENV_PATH="$RUNNER_TEMP/aigility-sdist"
+          python -m venv "$VENV_PATH"
+          "$VENV_PATH/bin/python" -m pip install --upgrade pip
+          "$VENV_PATH/bin/python" -m pip install "${SDISTS[0]}"
+          "$VENV_PATH/bin/python" -m pip check
+          SMOKE_DIR=$(mktemp -d "$RUNNER_TEMP/aigility-sdist-smoke.XXXXXX")
+          cd "$SMOKE_DIR"
+          "$VENV_PATH/bin/python" "$GITHUB_WORKSPACE/tests/wheel_smoke.py"
+
+  document-artifact:
+    name: Document extras from wheel
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Download the built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist
+
+      - name: Install document extras from the wheel
+        run: |
+          WHEELS=("$GITHUB_WORKSPACE"/dist/*.whl)
+          test "${#WHEELS[@]}" -eq 1
+          VENV_PATH="$RUNNER_TEMP/aigility-documents"
+          python -m venv "$VENV_PATH"
+          "$VENV_PATH/bin/python" -m pip install --upgrade pip
+          "$VENV_PATH/bin/python" -m pip install "${WHEELS[0]}[rag,doc-pdf,doc-word,doc-excel,doc-markdown]" pytest pytest-asyncio reportlab
+          "$VENV_PATH/bin/python" -m pip check
+
+      - name: Test document extras outside the source checkout
+        run: |
+          VENV_PATH="$RUNNER_TEMP/aigility-documents"
+          TEST_ROOT=$(mktemp -d "$RUNNER_TEMP/aigility-document-tests.XXXXXX")
+          cp "$GITHUB_WORKSPACE/pyproject.toml" "$TEST_ROOT/"
+          cp -R "$GITHUB_WORKSPACE/tests" "$TEST_ROOT/tests"
+          cd "$TEST_ROOT"
+          "$VENV_PATH/bin/python" -m pytest tests -m "optional_doc_pdf or optional_doc_word or optional_doc_excel or optional_doc_markdown or optional_rag"
+
+  timem-artifact:
+    name: TiMEM ${{ matrix.release }} from wheel
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: floor
+            python-version: "3.9"
+            dependency: "timem-ai==0.1.6"
+          - release: latest
+            python-version: "3.13"
+            dependency: "timem-ai"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download the built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist
+
+      - name: Install TiMEM ${{ matrix.release }} with the wheel
+        run: |
+          WHEELS=("$GITHUB_WORKSPACE"/dist/*.whl)
+          test "${#WHEELS[@]}" -eq 1
+          VENV_PATH="$RUNNER_TEMP/aigility-timem-${{ matrix.release }}"
+          python -m venv "$VENV_PATH"
+          "$VENV_PATH/bin/python" -m pip install --upgrade pip
+          "$VENV_PATH/bin/python" -m pip install "${WHEELS[0]}[timem]" "${{ matrix.dependency }}" pytest pytest-asyncio
+          "$VENV_PATH/bin/python" -m pip check
+
+      - name: Test TiMEM ${{ matrix.release }} outside the source checkout
+        run: |
+          VENV_PATH="$RUNNER_TEMP/aigility-timem-${{ matrix.release }}"
+          TEST_ROOT=$(mktemp -d "$RUNNER_TEMP/aigility-timem-tests.XXXXXX")
+          cp "$GITHUB_WORKSPACE/pyproject.toml" "$TEST_ROOT/"
+          cp -R "$GITHUB_WORKSPACE/tests" "$TEST_ROOT/tests"
+          cd "$TEST_ROOT"
+          "$VENV_PATH/bin/python" -m pytest tests -m "optional_timem and not integration"
+
+  dashscope-artifact:
+    name: DashScope ${{ matrix.capability }} ${{ matrix.release }} from wheel
+    needs: build-artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - capability: embedding
+            release: floor
+            python-version: "3.9"
+            extra: embedding-dashscope
+            constraint: dashscope==1.16.0
+            test-node: tests/test_dashscope_contract.py::test_embedding_dashscope_extra_initializes_the_public_factory_boundary
+          - capability: rerank
+            release: floor
+            python-version: "3.9"
+            extra: rerank-dashscope
+            constraint: dashscope==1.16.0
+            test-node: tests/test_dashscope_contract.py::test_rerank_dashscope_extra_initializes_the_public_factory_boundary
+          - capability: embedding
+            release: latest
+            python-version: "3.13"
+            extra: embedding-dashscope
+            constraint: ""
+            test-node: tests/test_dashscope_contract.py::test_embedding_dashscope_extra_initializes_the_public_factory_boundary
+          - capability: rerank
+            release: latest
+            python-version: "3.13"
+            extra: rerank-dashscope
+            constraint: ""
+            test-node: tests/test_dashscope_contract.py::test_rerank_dashscope_extra_initializes_the_public_factory_boundary
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download the built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist
+
+      - name: Install DashScope ${{ matrix.capability }} ${{ matrix.release }}
+        run: |
+          WHEELS=("$GITHUB_WORKSPACE"/dist/*.whl)
+          test "${#WHEELS[@]}" -eq 1
+          VENV_PATH="$RUNNER_TEMP/aigility-dashscope-${{ matrix.capability }}-${{ matrix.release }}"
+          python -m venv "$VENV_PATH"
+          "$VENV_PATH/bin/python" -m pip install --upgrade pip
+          CONSTRAINT_ARGS=()
+          if [ -n "${{ matrix.constraint }}" ]; then
+            CONSTRAINT_FILE="$RUNNER_TEMP/dashscope-${{ matrix.capability }}-${{ matrix.release }}.txt"
+            printf '%s\n' "${{ matrix.constraint }}" > "$CONSTRAINT_FILE"
+            CONSTRAINT_ARGS=(-c "$CONSTRAINT_FILE")
+          fi
+          "$VENV_PATH/bin/python" -m pip install "${CONSTRAINT_ARGS[@]}" "${WHEELS[0]}[${{ matrix.extra }}]" pytest pytest-asyncio
+          "$VENV_PATH/bin/python" -m pip check
+
+      - name: Test DashScope ${{ matrix.capability }} ${{ matrix.release }}
+        run: |
+          VENV_PATH="$RUNNER_TEMP/aigility-dashscope-${{ matrix.capability }}-${{ matrix.release }}"
+          TEST_ROOT=$(mktemp -d "$RUNNER_TEMP/aigility-dashscope-tests.XXXXXX")
+          cp "$GITHUB_WORKSPACE/pyproject.toml" "$TEST_ROOT/"
+          cp -R "$GITHUB_WORKSPACE/tests" "$TEST_ROOT/tests"
+          cd "$TEST_ROOT"
+          "$VENV_PATH/bin/python" -m pytest "${{ matrix.test-node }}" -m optional_dashscope
+
+  publish:
+    name: Publish tested artifacts to PyPI
+    needs:
+      - build-artifacts
+      - source-contract
+      - core-artifact
+      - sdist-artifact
+      - document-artifact
+      - timem-artifact
+      - dashscope-artifact
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download the tested distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist
+
+      - name: Publish to PyPI without rebuilding
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: dist/
           password: ${{ secrets.PYPI_API_TOKEN }}

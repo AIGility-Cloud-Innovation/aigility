@@ -57,6 +57,27 @@
 pip install aigility
 ```
 
+核心安装仅加载基础公共入口。导入 `aigility`、`ChatAgent`、`MemoryConfig`、
+`RAGConfig` 或 `TimeMRAGClient` 不会探测 TiMEM、pandas、PDF/Word 解析器、
+NLP 或向量库依赖。
+
+文档解析和 Memory Provider 按需安装：
+
+```bash
+pip install "aigility[doc-pdf]"    # PDF
+pip install "aigility[doc-word]"   # DOCX
+pip install "aigility[doc-excel]"  # XLSX / CSV
+pip install "aigility[timem]"      # TiMEM Memory Provider
+pip install "aigility[embedding-dashscope]"  # DashScope Embedding
+pip install "aigility[rerank-dashscope]"     # DashScope Rerank
+```
+
+用户明确请求功能但缺失 extra 时，SDK 会在功能首次使用处抛出包含
+精确 `pip install "aigility[...]"` 提示的 `ImportError`；基础导入不会输出日志或警告。
+显式启用 Memory Provider、Rerank 或文档解析时，缺少依赖或必需配置会立即
+报错，不会静默降级。文档摄取支持 `.docx`、`.xlsx` 和 `.csv`，不支持旧
+`.doc` 与 `.xls`；请在导入前转换为新格式。
+
 #### 完整功能安装
 
 ```bash
@@ -77,6 +98,10 @@ pip install "aigility[all]"
 
 创建 `.env` 文件：
 
+SDK 导入阶段不读取该文件。当应用显式构造 `RAGService()` 时，SDK 会在创建
+默认 `RAGConfig` 之前，从当前工作目录向上查找并加载 `.env`。进程中已设置
+的环境变量优先，不会被 `.env` 覆盖。
+
 ```bash
 # DeepSeek API 配置
 DEEPSEEK_API_KEY=sk-your-api-key
@@ -89,7 +114,7 @@ ZHIPUAI_API_KEY=your-api-key
 # Qdrant 配置（本地向量存储）
 QDRANT_URL=http://localhost:6333
 
-# 太忆 RAG 配置（可选）
+# TiMEM 集成配置（可选）
 TIMEM_ENABLED=true
 TIMEM_API_KEY=sk-your-timem-key
 TIMEM_BASE_URL=http://localhost:8000
@@ -798,7 +823,10 @@ chat_service.process_chat(request)
 
 | 安装方式 | 大小 | 说明 |
 |---------|-----|------|
-| `pip install aigility` | ~50MB | 核心依赖 |
+| `pip install aigility` | ~50MB | 核心依赖；不加载文档解析或 TiMEM SDK |
+| `aigility[doc-pdf]` | 按环境而定 | PDF 解析 |
+| `aigility[doc-word]` | 按环境而定 | DOCX 解析 |
+| `aigility[doc-excel]` | 按环境而定 | XLSX/CSV 解析 |
 | `aigility[rag-local]` | ~500MB-2GB | 含 HuggingFace 模型 |
 | `aigility[timem-rag]` | ~100MB | 含文档处理依赖 |
 

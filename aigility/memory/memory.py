@@ -90,14 +90,8 @@ class Memory:
             logger.info("Memory Provider is disabled")
             return
 
-        try:
-            self._provider = MemoryProviderFactory.create_provider(
-                self.config.provider
-            )
-            logger.info(f"Memory Provider initialized: {self.config.provider.provider}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Memory Provider: {e}")
-            self._provider = None
+        self._provider = MemoryProviderFactory.create_provider(self.config.provider)
+        logger.info(f"Memory Provider initialized: {self.config.provider.provider}")
     
     async def add(
         self,
@@ -241,4 +235,3 @@ class Memory:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """异步上下文管理器出口"""
         await self.close()
-
