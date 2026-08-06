@@ -2,11 +2,13 @@
 """
 DashScope 嵌入模型适配器
 
-使用前需要安装: pip install dashscope
+使用前需要安装: pip install "aigility[embedding-dashscope]"
 """
 
 import os
 from typing import List, Optional, TYPE_CHECKING
+
+from ..._optional import import_optional
 
 if TYPE_CHECKING:
     from aigility.rag.config import EmbeddingConfig
@@ -18,15 +20,11 @@ class DashScopeEmbeddingAdapter:
     """DashScope 嵌入模型适配器（实现 LangChain Embeddings 接口）"""
 
     def __init__(self, config: "EmbeddingConfig"):
-        # 延迟导入 dashscope
-        try:
-            import dashscope
-            self._dashscope = dashscope
-        except ImportError:
-            raise ImportError(
-                "使用 DashScope 嵌入模型需要安装 dashscope: "
-                "pip install dashscope"
-            )
+        self._dashscope = import_optional(
+            "dashscope",
+            feature="DashScope embedding",
+            extra="embedding-dashscope",
+        )
 
         self.config = config
         self.model_name = config.model_name

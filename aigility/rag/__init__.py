@@ -77,7 +77,9 @@ result = workflow.invoke({"query": "你的问题", "messages": []})
    ```
 """
 
-from .service import RAGService
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from .config import (
     RAGConfig,
     EmbeddingConfig,
@@ -85,12 +87,41 @@ from .config import (
     IngestionConfig,
     RerankConfig,
 )
-from .workflow import create_rag_workflow, RAGWorkflowState
 from .client import TimeMRAGClient, create_timem_rag_client
-from .ingestion import IngestionManager
-from .rerank import RerankFactory, BaseRerankAdapter
 from .usage_tracking import TokenUsage, UsageStats, SearchResult, AddFileResult
-from .embeddings.wrapper import EmbeddingWrapper
+
+if TYPE_CHECKING:
+    from .embeddings.wrapper import EmbeddingWrapper
+    from .ingestion import IngestionManager
+    from .rerank import BaseRerankAdapter, RerankFactory
+    from .service import RAGService
+    from .workflow import RAGWorkflowState, create_rag_workflow
+
+
+_LAZY_EXPORTS = {
+    "RAGService": (".service", "RAGService"),
+    "IngestionManager": (".ingestion", "IngestionManager"),
+    "RerankFactory": (".rerank", "RerankFactory"),
+    "BaseRerankAdapter": (".rerank", "BaseRerankAdapter"),
+    "EmbeddingWrapper": (".embeddings.wrapper", "EmbeddingWrapper"),
+    "create_rag_workflow": (".workflow", "create_rag_workflow"),
+    "RAGWorkflowState": (".workflow", "RAGWorkflowState"),
+}
+
+
+def __getattr__(name: str):
+    try:
+        module_name, attribute = _LAZY_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     # 基础服务

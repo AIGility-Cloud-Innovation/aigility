@@ -20,11 +20,28 @@ ADK Memory - 记忆管理模块
     memory = Memory(config=config)
 """
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from .memory import Memory
 from .config import MemoryConfig, MemoryProviderConfig
-from .providers.timem import TimemMemoryProvider
 from .providers.base import BaseMemoryProvider
 from .providers.factory import MemoryProviderFactory
+
+if TYPE_CHECKING:
+    from .providers.timem import TimemMemoryProvider
+
+
+def __getattr__(name: str):
+    if name != "TimemMemoryProvider":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(".providers.timem", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "Memory",
@@ -34,4 +51,3 @@ __all__ = [
     "BaseMemoryProvider",
     "MemoryProviderFactory",
 ]
-

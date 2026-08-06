@@ -2,10 +2,10 @@
 # [服务层] 对外暴露的统一入口 (RAGService)
 
 import os
-import sys
 import shutil
 import hashlib
 import logging
+from functools import lru_cache
 from datetime import datetime, timezone
 from typing import Callable, Optional, Dict, List
 from collections import defaultdict
@@ -13,51 +13,53 @@ from collections import defaultdict
 from .usage_tracking import UsageStats, TokenUsage, SearchResult, AddFileResult
 from .embeddings.wrapper import EmbeddingWrapper
 
-# 加载 .env 文件
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+from .config import RAGConfig
+from .embeddings.factory import EmbeddingFactory
+from .vector_stores.factory import VectorStoreFactory
+from .ingestion import IngestionManager
+from .rerank.factory import RerankFactory
 
-# 抑制 tokenizers 并行警告
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-# 处理直接运行时的导入问题
-try:
-    # 作为包导入时使用相对导入
-    from .config import RAGConfig
-    from .embeddings.factory import EmbeddingFactory
-    from .vector_stores.factory import VectorStoreFactory
-    from .ingestion import IngestionManager
-    from .rerank.factory import RerankFactory
-except ImportError:
-    # 直接运行时使用绝对导入
-    _current_dir = os.path.dirname(os.path.abspath(__file__))
-    _package_dir = os.path.dirname(os.path.dirname(_current_dir))
-    if _package_dir not in sys.path:
-        sys.path.insert(0, _package_dir)
+def _load_dotenv_for_rag_service() -> None:
+    """Load the caller's .env file only at the explicit service-use boundary."""
+    from dotenv import find_dotenv, load_dotenv
 
-    from aigility.rag.config import RAGConfig
-    from aigility.rag.embeddings.factory import EmbeddingFactory
-    from aigility.rag.vector_stores.factory import VectorStoreFactory
-    from aigility.rag.ingestion import IngestionManager
-    from aigility.rag.rerank.factory import RerankFactory
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path=dotenv_path, override=False)
 
-# NLP 依赖用于提取元数据 (关键词/摘要)
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    import jieba
-    HAS_NLP_DEPS = True
-except ImportError:
-    HAS_NLP_DEPS = False
 
-# BM25 依赖（可选）
-try:
-    from rank_bm25 import BM25Okapi
-    HAS_RANK_BM25 = True
-except ImportError:
-    HAS_RANK_BM25 = False
+@lru_cache(maxsize=1)
+def _load_nlp_tools():
+    """Load optional keyword-extraction enhancements on first use."""
+    try:
+        import jieba
+        from sklearn.feature_extraction.text import TfidfVectorizer
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        requested_modules = {
+            "jieba",
+            "sklearn",
+            "sklearn.feature_extraction",
+            "sklearn.feature_extraction.text",
+        }
+        if missing not in requested_modules:
+            raise
+        return None
+    return jieba, TfidfVectorizer
+
+
+@lru_cache(maxsize=1)
+def _load_rank_bm25():
+    """Load the optional BM25 accelerator on first use."""
+    try:
+        from rank_bm25 import BM25Okapi
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        if missing != "rank_bm25":
+            raise
+        return None
+    return BM25Okapi
 
 
 class RAGService:
@@ -69,8 +71,9 @@ class RAGService:
         Args:
             config: RAG 配置对象。如果不传，使用默认配置。
         """
+        _load_dotenv_for_rag_service()
         self.config = config or RAGConfig()
-        
+
         logging.info(f"🔧 Initializing RAG with: Embedding={self.config.embedding.provider}, Store={self.config.vector_store.provider}")
 
         # 1. 初始化 Embedding 模型
@@ -111,11 +114,8 @@ class RAGService:
         # 6. Rerank 重排序（可选）
         self._reranker = None
         if self.config.rerank.enabled:
-            try:
-                self._reranker = RerankFactory.get_reranker(self.config.rerank)
-                logging.info(f"✅ Rerank 已启用: {self.config.rerank.provider}/{self.config.rerank.model_name}")
-            except Exception as e:
-                logging.warning(f"⚠️ Rerank 初始化失败，将跳过 rerank: {e}")
+            self._reranker = RerankFactory.get_reranker(self.config.rerank)
+            logging.info(f"✅ Rerank 已启用: {self.config.rerank.provider}/{self.config.rerank.model_name}")
 
         # 7. Usage 追踪
         self._total_usage = UsageStats()
@@ -158,8 +158,10 @@ class RAGService:
 
         # 生成关键词
         doc_keywords = []
-        if HAS_NLP_DEPS:
+        nlp_tools = _load_nlp_tools()
+        if nlp_tools is not None:
             try:
+                jieba, TfidfVectorizer = nlp_tools
                 # 简单清洗
                 clean_text = combined_text.replace("\n", " ").replace("|", " ").replace("-", " ")
                 word_list = jieba.lcut(clean_text)
@@ -1036,7 +1038,8 @@ class RAGService:
                 }
 
             # 构建 BM25 索引
-            if HAS_RANK_BM25:
+            BM25Okapi = _load_rank_bm25()
+            if BM25Okapi is not None:
                 self._bm25_index = BM25Okapi(self._bm25_corpus, k1=1.5, b=0.75, epsilon=0.25)
                 logging.info(f"✅ BM25索引构建完成 (使用 rank_bm25 库)")
             else:
@@ -1066,7 +1069,9 @@ class RAGService:
             分词结果列表
         """
         # 使用jieba分词（如果可用）
-        if HAS_NLP_DEPS:
+        nlp_tools = _load_nlp_tools()
+        if nlp_tools is not None:
+            jieba, _ = nlp_tools
             words = jieba.lcut(text)
             # 过滤停用词和单字
             stopwords = {'的', '了', '是', '在', '和', '与', '或', '|||', '、', '，', '。', '（', '）', '(', ')', '[', ']'}

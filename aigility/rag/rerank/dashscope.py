@@ -2,11 +2,12 @@
 """
 DashScope Rerank 适配器 (阿里云百炼 qwen3-rerank)
 
-使用前需要安装: pip install dashscope
+使用前需要安装: pip install "aigility[rerank-dashscope]"
 """
 
 from typing import List, Optional, TYPE_CHECKING
 
+from ..._optional import import_optional
 from .base import BaseRerankAdapter
 
 if TYPE_CHECKING:
@@ -18,14 +19,11 @@ class DashScopeRerankAdapter(BaseRerankAdapter):
 
     def __init__(self, config: "RerankConfig"):
         super().__init__()
-        try:
-            import dashscope
-            self._dashscope = dashscope
-        except ImportError:
-            raise ImportError(
-                "使用 DashScope Rerank 需要安装 dashscope: "
-                "pip install dashscope"
-            )
+        self._dashscope = import_optional(
+            "dashscope",
+            feature="DashScope rerank",
+            extra="rerank-dashscope",
+        )
 
         self.config = config
         self.model_name = config.model_name

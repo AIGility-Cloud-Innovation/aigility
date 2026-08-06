@@ -4,18 +4,10 @@ Timem Memory Provider 实现
 import logging
 from typing import Dict, Any, List, Optional
 
+from ..._optional import import_optional
 from .base import BaseMemoryProvider
 
 logger = logging.getLogger(__name__)
-
-try:
-    from timem import AsyncMemory
-    TIMEM_SDK_AVAILABLE = True
-except ImportError:
-    AsyncMemory = None  # type: ignore
-    TIMEM_SDK_AVAILABLE = False
-    logger.warning("timem-ai SDK未安装，请运行: pip install timem-ai")
-
 
 class TimemMemoryProvider(BaseMemoryProvider):
     """
@@ -27,25 +19,29 @@ class TimemMemoryProvider(BaseMemoryProvider):
         super().__init__(config)
         self.api_key = config.get_api_key()
         self.base_url = config.get_base_url()
-        self.enabled = config.enabled and bool(self.api_key) and TIMEM_SDK_AVAILABLE
-        
+        self.enabled = False
         self._client: Optional[Any] = None
-        
-        if self.enabled:
-            try:
-                self._client = AsyncMemory(
-                    api_key=self.api_key,
-                    base_url=self.base_url.rstrip('/') if self.base_url else None
-                )
-                logger.info("Timem Memory Provider 初始化成功")
-            except Exception as e:
-                logger.error(f"Timem Memory Provider 初始化失败: {str(e)}")
-                self.enabled = False
-        else:
-            if not TIMEM_SDK_AVAILABLE:
-                logger.warning("Timem Memory Provider 未启用: SDK未安装")
-            elif not self.api_key:
-                logger.warning("Timem Memory Provider 未启用: 缺少 API Key")
+
+        if not config.enabled:
+            return
+        if not self.api_key:
+            raise ValueError(
+                "TiMEM memory is enabled but no API key was provided. "
+                "Set TIMEM_API_KEY or pass api_key in MemoryProviderConfig."
+            )
+
+        timem = import_optional(
+            "timem",
+            feature="TiMEM memory",
+            extra="timem",
+            dependency="timem-ai",
+        )
+        self._client = timem.AsyncMemory(
+            api_key=self.api_key,
+            base_url=self.base_url.rstrip("/") if self.base_url else None,
+        )
+        self.enabled = True
+        logger.info("Timem Memory Provider 初始化成功")
 
     async def _ensure_client(self) -> bool:
         """确保客户端已初始化"""

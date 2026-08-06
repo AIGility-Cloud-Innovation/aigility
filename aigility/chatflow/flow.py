@@ -12,7 +12,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableConfig
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
-from ..rag import create_timem_rag_client
+from ..rag.client import create_timem_rag_client
 from .schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, get_tool_names, get_tool_schema_map
 
 # --- 1. 辅助函数：加载配置 ---
