@@ -28,6 +28,11 @@ ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 ZHIPUAI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPUAI_MODEL = "glm-4-flash"
 
+# 无 DeepSeek 凭据时（如 CI 未配置 secret）跳过真实调用测试
+requires_deepseek = pytest.mark.skipif(
+    not DEEPSEEK_API_KEY, reason="无 DEEPSEEK_API_KEY，跳过 DeepSeek 真实调用测试"
+)
+
 
 def make_deepseek_config(**overrides):
     """构造 DeepSeek ADKConfig"""
@@ -132,6 +137,7 @@ class TestChatAgentInterface:
 # 3. create_llm() 真实调用测试
 # ============================================================
 
+@requires_deepseek
 class TestCreateLlmReal:
     """测试 create_llm() 创建真实可用的 LLM 实例"""
 
@@ -206,6 +212,7 @@ class TestCreateLlmReal:
 # 4. ModelFactory 真实调用测试
 # ============================================================
 
+@requires_deepseek
 class TestModelFactoryReal:
     """测试 ModelFactory.create_llm() 通过 ADKConfig 创建真实 LLM"""
 
@@ -242,6 +249,7 @@ class TestModelFactoryReal:
 # 5. ChatAgent 真实对话测试
 # ============================================================
 
+@requires_deepseek
 class TestChatAgentReal:
     """测试 ChatAgent 使用真实 DeepSeek 模型进行对话"""
 
@@ -314,6 +322,7 @@ class TestADKClientE2E:
         assert agent.adk_config.llm_api_key == DEEPSEEK_API_KEY
         assert agent.adk_config.llm_base_url == DEEPSEEK_BASE_URL
 
+    @requires_deepseek
     def test_builder_agent_can_chat(self):
         """通过 Builder 创建的 Agent 可以真实对话"""
         from aigility import ADKClientBuilder
@@ -336,6 +345,7 @@ class TestADKClientE2E:
         assert len(response) > 0
         print(f"\n  [ADKClient→Agent] 模型回复: {response}")
 
+    @requires_deepseek
     def test_builder_chatflow_can_invoke(self):
         """通过 Builder 创建的 ChatFlow 可以真实调用"""
         from aigility import ADKClientBuilder
@@ -357,6 +367,7 @@ class TestADKClientE2E:
         assert len(result["response"]) > 0
         print(f"\n  [ADKClient→ChatFlow] 模型回复: {result['response']}")
 
+    @requires_deepseek
     def test_create_client_shortcut(self):
         """create_client() 快捷函数创建的客户端可用"""
         from aigility import create_client
@@ -464,6 +475,7 @@ class TestZhipuAIProvider:
 class TestBackwardCompatibility:
     """测试现有用法不受影响"""
 
+    @requires_deepseek
     def test_chatflow_direct_creation(self):
         """直接创建 ChatFlow（与外部项目用法一致）"""
         from aigility.chatflow.flow import ChatFlow
@@ -476,6 +488,7 @@ class TestBackwardCompatibility:
         assert len(result["response"]) > 0
         print(f"\n  [直接ChatFlow] 模型回复: {result['response']}")
 
+    @requires_deepseek
     def test_chat_service_direct_creation(self):
         """直接创建 ChatService"""
         from aigility.chat.service import ChatService
