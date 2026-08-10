@@ -150,6 +150,7 @@ class ChatAgent(BaseAgent):
             content=result["response"],
             metadata={
                 "thought_process": result.get("thought_process"),
+                "reasoning_content": result.get("reasoning_content"),
                 "tool_results": [
                     {"tool_name": tr.tool_name, "result": tr.result}
                     for tr in (result.get("tool_results") or [])
