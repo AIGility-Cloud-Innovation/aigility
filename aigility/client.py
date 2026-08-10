@@ -124,6 +124,31 @@ class ADKClientBuilder:
         self.config.memory_base_url = base_url
         return self
 
+    def with_rag(
+        self,
+        enabled: bool = True,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        kb_id: Optional[str] = None,
+    ) -> "ADKClientBuilder":
+        """
+        配置 RAG（TimeM 云服务）
+
+        Args:
+            enabled: 是否启用 RAG
+            api_key: TimeM API Key
+            base_url: TimeM Base URL
+            kb_id: 默认知识库 ID（可在 chat() 调用时覆盖）
+        """
+        self.config.timem_enabled = enabled
+        if api_key is not None:
+            self.config.timem_api_key = api_key
+        if base_url is not None:
+            self.config.timem_base_url = base_url
+        if kb_id is not None:
+            self.config.timem_kb_id = kb_id
+        return self
+
     def with_http(
         self,
         timeout: float = 60.0,
@@ -135,7 +160,7 @@ class ADKClientBuilder:
         self.config.http_max_retries = max_retries
         self.config.http_verify_ssl = verify_ssl
         return self
-    
+
     def with_debug(self, enabled: bool = True) -> "ADKClientBuilder":
         """配置调试模式"""
         self.config.debug = enabled

@@ -5,6 +5,7 @@ Chat Agent
 """
 
 from typing import Optional, List, Dict, Any
+from langchain_core.runnables import RunnableConfig
 from ..core.base import BaseAgent
 from ..core.types import State, Message, AgentResponse, MessageRole
 from ..core.config import ADKConfig, AgentConfig
@@ -46,18 +47,70 @@ class ChatAgent(BaseAgent):
             )
         return self._chat_flow
 
-    def chat(self, user_input: str, rag_used: str = "auto") -> str:
+    def _resolve_kb_id(self, kb_id: Optional[str] = None) -> Optional[str]:
+        """解析 kb_id：优先使用传入的值，否则使用 adk_config 中的默认值"""
+        if kb_id:
+            return kb_id
+        return self.adk_config.timem_kb_id
+
+    def _require_kb_id(self, kb_id: Optional[str], rag_used: str) -> Optional[str]:
+        """
+        验证并解析 kb_id。当 rag_used 不是 "off" 时，kb_id 为必传。
+
+        Args:
+            kb_id: 调用时传入的 kb_id
+            rag_used: RAG 模式
+
+        Returns:
+            解析后的 kb_id，RAG 关闭时可为 None
+
+        Raises:
+            ValueError: RAG 模式下未提供 kb_id
+        """
+        if rag_used == "off":
+            return None
+        resolved = self._resolve_kb_id(kb_id)
+        if not resolved:
+            raise ValueError(
+                f"rag_used='{rag_used}' 但未提供 kb_id 知识库 ID。"
+                f"请通过 chat(kb_id='your_kb_id') 传入，"
+                f"或在 ADKClientBuilder.with_rag(kb_id='your_kb_id') 中设置默认值。"
+            )
+        return resolved
+
+    def _make_config(self, kb_id: Optional[str] = None, rag_used: str = "auto") -> Optional[RunnableConfig]:
+        """根据 kb_id 和 rag_used 构造 RunnableConfig"""
+        resolved_kb_id = self._require_kb_id(kb_id, rag_used)
+        if resolved_kb_id:
+            return RunnableConfig(configurable={"timem_kb_id": resolved_kb_id})
+        return None
+
+    def chat(
+        self,
+        user_input: str,
+        rag_used: str = "auto",
+        kb_id: Optional[str] = None,
+    ) -> str:
         """
         同步对话（便捷方法）
 
         Args:
             user_input: 用户输入
-            rag_used: RAG 模式 ("auto", "on", "off")
+            rag_used: RAG 模式 ("auto", "on", "off")。非 "off" 时 kb_id 必传。
+            kb_id: 知识库 ID（RAG 模式下必传，优先于 adk_config.timem_kb_id）
 
         Returns:
             AI 回复文本
+
+        Raises:
+            ValueError: rag_used 非 "off" 但未提供 kb_id
         """
-        result = self.chat_flow.invoke(user_input=user_input, rag_used=rag_used)
+        config = self._make_config(kb_id, rag_used)
+        result = self.chat_flow.invoke(
+            user_input=user_input,
+            rag_used=rag_used,
+            config=config,
+        )
         return result["response"]
 
     async def invoke(self, state: State) -> AgentResponse:
@@ -65,10 +118,14 @@ class ChatAgent(BaseAgent):
         执行对话（实现 BaseAgent 抽象接口）
 
         Args:
-            state: 当前状态，从 messages 中提取最后一条用户消息
+            state: 当前状态，从 messages 中提取最后一条用户消息。
+                  可通过 state.metadata["kb_id"] 传入知识库 ID（RAG 模式下必传）。
 
         Returns:
             智能体响应
+
+        Raises:
+            ValueError: 未提供 kb_id
         """
         # 从 State 中提取用户输入
         user_input = ""
@@ -79,7 +136,15 @@ class ChatAgent(BaseAgent):
         if not user_input and state.messages:
             user_input = state.messages[-1].content
 
-        result = self.chat_flow.invoke(user_input=user_input, rag_used="auto")
+        # 从 state.metadata 中提取 kb_id（如有）
+        kb_id = state.metadata.get("kb_id") if state.metadata else None
+        config = self._make_config(kb_id, rag_used="auto")
+
+        result = self.chat_flow.invoke(
+            user_input=user_input,
+            rag_used="auto",
+            config=config,
+        )
 
         return AgentResponse(
             content=result["response"],

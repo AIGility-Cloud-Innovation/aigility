@@ -33,6 +33,7 @@ class ADKConfig:
     timem_api_key: Optional[str] = None  # 太忆API Key
     timem_base_url: Optional[str] = None  # 太忆API基础URL
     timem_enabled: bool = False  # 是否启用太忆RAG服务
+    timem_kb_id: Optional[str] = None  # 默认知识库ID（可在调用时覆盖）
 
     # 工作流配置
     workflow_timeout: float = 300.0
