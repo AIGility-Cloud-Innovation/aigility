@@ -89,6 +89,7 @@ class ChatService:
             session_title=session_title,
             reply_suggestions=reply_suggestions,
             thought_process=flow_result.get("thought_process"),
+            reasoning_content=flow_result.get("reasoning_content"),
             tool_results=tool_results_list
         )
         build_elapsed = (time.perf_counter() - build_start) * 1
@@ -102,6 +103,12 @@ class ChatService:
     async def process_chat_stream(self, request: ChatRequest):
         """
         处理流式聊天请求。
+
+        透传 ChatFlow.astream 的事件，调用方按事件 key 与 additional_kwargs 区分:
+        - {"agent_decision": {...}}      决策 thought 事件(一次性)
+        - {"stream_response": {"messages": [chunk]}}
+            chunk.additional_kwargs 含 "reasoning_content" -> 思维链增量
+            否则 chunk.content 为正文增量
         """
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
         history = []

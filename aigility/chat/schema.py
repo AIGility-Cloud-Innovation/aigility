@@ -21,4 +21,5 @@ class ChatResponse(BaseModel):
     session_title: Optional[str] = Field(None, description="会话标题建议")
     reply_suggestions: List[str] = Field(..., description="后续回复建议列表")
     thought_process: Optional[str] = Field(None, description="Agent的思维链(CoT)过程，用于调试和监控")
+    reasoning_content: Optional[str] = Field(None, description="推理模型(reasoning模式)生成的原生思维链内容")
     tool_results: Optional[List[dict]] = Field(None, description="工具调用结果列表，用于调试和监控")
