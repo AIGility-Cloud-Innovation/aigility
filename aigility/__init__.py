@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 _LAZY_EXPORTS = {
     "ADKClient": (".client", "ADKClient"),
+    "ADKClientBuilder": (".client", "ADKClientBuilder"),
     "create_client": (".client", "create_client"),
     "memory": (".memory", None),
     "chat": (".chat", None),
