@@ -17,10 +17,12 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from aigility.chat.service import ChatService
+from aigility.chat.agent import ChatAgent
 from aigility.chat.schema import ChatRequest
-from aigility.chatflow.flow import ChatFlow, _extract_stream_parts
+from aigility.chatflow.flow import ChatFlow, _extract_stream_parts, _explain_llm_error
 from aigility.core.config import ADKConfig
 from aigility.core.model_factory import ModelFactory
+from aigility.core.types import Message, MessageRole, State
 
 
 class FakeReasoningChatModel(BaseChatModel):
@@ -239,3 +241,73 @@ class TestChatService:
             )
         ]
         assert "".join(reasoning_deltas) == fake_llm.reasoning
+
+
+# ---------------------------------------------------------------------------
+# 5. ChatAgent 路径：reasoning_content 透传到 AgentResponse.metadata
+# ---------------------------------------------------------------------------
+
+
+class TestChatAgent:
+    async def test_invoke_surfaces_reasoning_content(self, fake_llm, off_config):
+        with mock.patch.object(ModelFactory, "create_llm", return_value=fake_llm):
+            agent = ChatAgent(name="t", adk_config=off_config)
+            state = State(messages=[Message(role=MessageRole.USER, content="哪个大?")])
+            resp = await agent.invoke(state)
+
+        assert resp.content == fake_llm.content
+        assert resp.metadata["reasoning_content"] == fake_llm.reasoning
+        assert resp.metadata["thought_process"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 6. 思维链参数错配的友好报错（llm_reasoning 与不支持的模型）
+# ---------------------------------------------------------------------------
+
+
+class FakeBadRequestError(Exception):
+    status_code = 400
+
+
+class FakeRejectingChatModel(FakeReasoningChatModel):
+    """模拟不支持思维链参数的模型：收到 thinking 参数直接 400。"""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        raise FakeBadRequestError(
+            "Error code: 400 - {'error': {'message': "
+            "\"unknown parameter: 'thinking'\"}}"
+        )
+
+
+class TestExplainLlmError:
+    def test_400_with_thinking_keyword_gets_hint(self):
+        err = FakeBadRequestError("Error code: 400 - unknown parameter: 'thinking'")
+        explained = _explain_llm_error(err)
+        assert "llm_reasoning" in explained
+        assert "unknown parameter" in explained  # 原始信息保留
+
+    def test_400_with_reasoning_effort_keyword_gets_hint(self):
+        err = FakeBadRequestError(
+            "Error code: 400 - Unsupported parameter: 'reasoning_effort'"
+        )
+        assert "llm_reasoning" in _explain_llm_error(err)
+
+    def test_400_without_reasoning_keyword_unchanged(self):
+        err = FakeBadRequestError("Error code: 400 - invalid model name")
+        assert _explain_llm_error(err) == str(err)
+
+    def test_non_400_with_reasoning_keyword_unchanged(self):
+        err = Exception("Error code: 500 - reasoning service internal error")
+        assert _explain_llm_error(err) == str(err)
+
+
+class TestReasoningMismatchFriendlyError:
+    def test_invoke_error_message_contains_hint(self, off_config):
+        rejecting_llm = FakeRejectingChatModel()
+        with mock.patch.object(ModelFactory, "create_llm", return_value=rejecting_llm):
+            flow = ChatFlow(adk_config=off_config)
+            result = flow.invoke(user_input="你好", rag_used="off")
+
+        # 错配场景下，返回给用户的错误信息应包含排障提示
+        assert "抱歉，生成回复时发生错误" in result["response"]
+        assert "llm_reasoning" in result["response"]

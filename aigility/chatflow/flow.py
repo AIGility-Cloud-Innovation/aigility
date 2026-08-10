@@ -51,6 +51,29 @@ def _extract_stream_parts(message: Any) -> Tuple[str, str]:
                 content += block.get("text", "")
     return reasoning, content
 
+def _explain_llm_error(error: Exception) -> str:
+    """为 LLM 调用异常补充排障提示。
+
+    识别"模型不支持思维链参数"类 400 错误（llm_reasoning 开关与模型能力错配），
+    在原始错误信息后追加针对性提示；其他错误原样返回字符串。
+    """
+    message = str(error)
+    status = getattr(error, "status_code", None)
+    lowered = message.lower()
+    looks_like_400 = status == 400 or "400" in message
+    mentions_reasoning = any(
+        keyword in lowered
+        for keyword in ("thinking", "reasoning_effort", "reasoning_content", "reasoning")
+    )
+    if looks_like_400 and mentions_reasoning:
+        message += (
+            "（提示：该错误可能与思维链参数有关——请检查 ADKConfig.llm_reasoning "
+            "与模型能力是否匹配：普通模型请设 llm_reasoning=False；"
+            "纯推理模型（deepseek-reasoner/o1 等）的思考无法关闭）"
+        )
+    return message
+
+
 # --- 1. 辅助函数：加载配置 ---
 def load_default_config() -> Dict[str, Any]:
     """Load the chat flow configuration from the YAML file."""
@@ -337,12 +360,13 @@ class ChatFlow:
 
         except Exception as e:
             import traceback
-            print(f"--- [ADK] Agent decision failed: {e} ---")
+            explained = _explain_llm_error(e)
+            print(f"--- [ADK] Agent decision failed: {explained} ---")
             if self.adk_config.debug:
                 print(f"--- [ADK] Traceback: {traceback.format_exc()} ---")
             node_elapsed = (time.perf_counter() - node_start) * 1
             print(f"⏱️ [ADK性能] Agent Decision 节点耗时(失败): {node_elapsed:.2f}s")
-            return {"thought": f"决策过程出错: {str(e)}", "tool_calls": []}
+            return {"thought": f"决策过程出错: {explained}", "tool_calls": []}
 
     def _should_continue(self, state: ChatFlowState) -> str:
         """
@@ -483,8 +507,9 @@ class ChatFlow:
         except Exception as e:
             node_elapsed = (time.perf_counter() - node_start) * 1
             print(f"⏱️ [ADK性能] Stream Response 节点耗时(失败): {node_elapsed:.2f}s")
-            print(f"Response generation failed: {e}")
-            return {"messages": [AIMessage(content=f"抱歉，生成回复时发生错误: {e}")]}
+            explained = _explain_llm_error(e)
+            print(f"Response generation failed: {explained}")
+            return {"messages": [AIMessage(content=f"抱歉，生成回复时发生错误: {explained}")]}
 
     def invoke(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None, rag_used: str = "auto") -> Dict[str, Any]:
         """
@@ -631,7 +656,8 @@ class ChatFlow:
         else:
             print(f"--- [ADK] 🤖 RAG AUTO 模式: 将由决策节点决定 ---")
 
-        print(f"DEBUG [astream]: Starting with stream_mode='updates'...")
+        if self.adk_config.debug:
+            print(f"DEBUG [astream]: Starting with stream_mode='updates'...")
         chain = None
         prompt_input = None
 
@@ -644,7 +670,8 @@ class ChatFlow:
 
             async for event in stream_iter:
                 node_name = list(event.keys())[0] if event else None
-                print(f"DEBUG [astream]: Node completed: {node_name}")
+                if self.adk_config.debug:
+                    print(f"DEBUG [astream]: Node completed: {node_name}")
 
                 if node_name == "agent_decision":
                     # 推送决策 thought 事件(一次性, 调用方可选消费)
@@ -664,11 +691,13 @@ class ChatFlow:
                     node_output = event.get("prepare_for_generation", {})
                     chain = node_output.get("chain")
                     prompt_input = node_output.get("prompt_input")
-                    print(f"DEBUG [astream]: Got chain={chain is not None}, prompt_input={prompt_input is not None}")
+                    if self.adk_config.debug:
+                        print(f"DEBUG [astream]: Got chain={chain is not None}, prompt_input={prompt_input is not None}")
 
                     # 现在手动执行流式 LLM 调用
                     if chain and prompt_input:
-                        print("DEBUG [astream]: Starting manual LLM streaming...")
+                        if self.adk_config.debug:
+                            print("DEBUG [astream]: Starting manual LLM streaming...")
                         chunk_count = 0
                         try:
                             async for chunk in chain.astream(prompt_input):
@@ -687,25 +716,29 @@ class ChatFlow:
                                         }
                                     }
                                 if content_delta:
-                                    print(f"DEBUG [astream]: Chunk #{chunk_count}: {content_delta!r}")
+                                    if self.adk_config.debug:
+                                        print(f"DEBUG [astream]: Chunk #{chunk_count}: {content_delta!r}")
                                     yield {
                                         "stream_response": {
                                             "messages": [AIMessageChunk(content=content_delta, id="stream")]
                                         }
                                     }
-                            print(f"DEBUG [astream]: LLM streaming finished. Total chunks: {chunk_count}")
+                            if self.adk_config.debug:
+                                print(f"DEBUG [astream]: LLM streaming finished. Total chunks: {chunk_count}")
                         except Exception as e:
-                            print(f"DEBUG [astream]: LLM streaming error: {e}")
-                            import traceback
-                            traceback.print_exc()
+                            print(f"--- [ADK] LLM streaming error: {_explain_llm_error(e)} ---")
+                            if self.adk_config.debug:
+                                import traceback
+                                traceback.print_exc()
 
                     # 不再继续执行 stream_response 节点，因为我们已经手动处理了
                     break
                     
         except Exception as e:
-            print(f"DEBUG [astream]: Graph error: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"--- [ADK] Graph error: {e} ---")
+            if self.adk_config.debug:
+                import traceback
+                traceback.print_exc()
 
 def create_chatflow(
     name: str,
