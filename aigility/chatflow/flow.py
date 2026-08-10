@@ -3,17 +3,53 @@ import yaml
 import os
 import json
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AnyMessage, AIMessageChunk
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableConfig
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
 from ..rag.client import create_timem_rag_client
 from .schema import ChatFlowState, ToolCall, ToolResult, get_tool_descriptions, get_tool_names, get_tool_schema_map
+
+
+def _extract_stream_parts(message: Any) -> Tuple[str, str]:
+    """从 LLM 消息/chunk 中提取 (reasoning, content)，provider 无关。
+
+    兼容两种思维链承载方式:
+    - DeepSeek 风格(deepseek-reasoner 等): additional_kwargs["reasoning_content"]
+    - 标准 content blocks(OpenAI o 系列等): content 为 list 时,
+      type == "reasoning" 的块 -> reasoning; type == "text" 的块 -> content
+    """
+    reasoning = ""
+    content = ""
+
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    rc = additional_kwargs.get("reasoning_content")
+    if isinstance(rc, str):
+        reasoning += rc
+
+    raw_content = getattr(message, "content", message)
+    if isinstance(raw_content, str):
+        content += raw_content
+    elif isinstance(raw_content, list):
+        for block in raw_content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "reasoning":
+                text = block.get("reasoning") or block.get("text") or ""
+                if not text and isinstance(block.get("summary"), list):
+                    # OpenAI responses API: 推理摘要放在 summary 列表里
+                    text = "".join(
+                        s.get("text", "") for s in block["summary"] if isinstance(s, dict)
+                    )
+                reasoning += text
+            elif block_type == "text":
+                content += block.get("text", "")
+    return reasoning, content
 
 # --- 1. 辅助函数：加载配置 ---
 def load_default_config() -> Dict[str, Any]:
@@ -394,19 +430,16 @@ class ChatFlow:
         if not tool_results_str:
             tool_results_str = "无工具调用结果。"
 
-        # Use StrOutputParser for better streaming
-        parser = StrOutputParser()
-        
-        # We don't need format instructions for raw text generation
-        # response_prompt_template = response_prompt + "\n\n{format_instructions}"
+        # 不再使用 StrOutputParser: parser 会把 chunk 压成纯字符串,
+        # 导致推理模型的 reasoning_content 在流式传输中丢失。
+        # 统一由消费端(_stream_response / astream)通过 _extract_stream_parts 归一化。
         response_prompt_template = response_prompt
 
         prompt = ChatPromptTemplate.from_template(
             response_prompt_template
-            # partial_variables={"format_instructions": format_instructions}
         )
 
-        chain = prompt | self.llm | parser
+        chain = prompt | self.llm
 
         node_elapsed = (time.perf_counter() - node_start) * 1
         print(f"⏱️ [ADK性能] Prepare for Generation 节点耗时: {node_elapsed:.2f}s")
@@ -432,7 +465,7 @@ class ChatFlow:
         if not chain or not prompt_input:
             return {"messages": [AIMessage(content="无法生成回复")]}
         
-        # 同步调用 LLM
+        # 同步调用 LLM(chain 直接返回 AIMessage, 正文与思维链在此拆分)
         try:
             llm_start = time.perf_counter()
             response = chain.invoke(prompt_input)
@@ -442,10 +475,11 @@ class ChatFlow:
             node_elapsed = (time.perf_counter() - node_start) * 1
             print(f"⏱️ [ADK性能] Stream Response 节点总耗时: {node_elapsed:.2f}s")
 
-            if isinstance(response, str):
-                return {"messages": [AIMessage(content=response)]}
-            else:
-                return {"messages": [AIMessage(content=str(response))]}
+            reasoning, content = _extract_stream_parts(response)
+            message = AIMessage(content=content)
+            if reasoning:
+                message.additional_kwargs["reasoning_content"] = reasoning
+            return {"messages": [message]}
         except Exception as e:
             node_elapsed = (time.perf_counter() - node_start) * 1
             print(f"⏱️ [ADK性能] Stream Response 节点耗时(失败): {node_elapsed:.2f}s")
@@ -525,7 +559,13 @@ class ChatFlow:
             final_state = self.graph.invoke(initial_state)
 
         # 提取最终结果
-        final_message = final_state["messages"][-1].content
+        final_message_obj = final_state["messages"][-1]
+        final_message = final_message_obj.content
+        if not isinstance(final_message, str):
+            final_message = str(final_message)
+        reasoning_content = None
+        if hasattr(final_message_obj, "additional_kwargs"):
+            reasoning_content = final_message_obj.additional_kwargs.get("reasoning_content")
 
         invoke_elapsed = (time.perf_counter() - invoke_start) * 1
         print(f"\n{'='*60}")
@@ -534,6 +574,7 @@ class ChatFlow:
 
         return {
             "response": final_message,
+            "reasoning_content": reasoning_content,
             "thought_process": final_state.get("thought"),
             "tool_results": final_state.get("tool_results"),
             "full_history": final_state["messages"]
@@ -546,6 +587,14 @@ class ChatFlow:
         由于旧版 LangGraph 不支持 get_stream_writer，
         我们使用 updates 模式运行图到 prepare_for_generation 节点，
         然后手动执行流式 LLM 调用。
+
+        流式事件契约(均为 LangGraph updates 风格的 dict):
+        1. 决策事件(auto/on/off 模式下均会在决策节点完成后推送一次)::
+            {"agent_decision": {"thought": "...", "tool_calls": [{"tool_name": ..., "query": ...}]}}
+        2. 思维链增量(reasoning 模型专有, 0~N 次)::
+            {"stream_response": {"messages": [AIMessageChunk(content="", additional_kwargs={"reasoning_content": "..."})]}}
+        3. 正文增量(0~N 次)::
+            {"stream_response": {"messages": [AIMessageChunk(content="...")]}}
 
         Args:
             user_input: 用户输入
@@ -618,14 +667,27 @@ class ChatFlow:
             async for event in stream_iter:
                 node_name = list(event.keys())[0] if event else None
                 print(f"DEBUG [astream]: Node completed: {node_name}")
-                
+
+                if node_name == "agent_decision":
+                    # 推送决策 thought 事件(一次性, 调用方可选消费)
+                    node_output = event.get("agent_decision", {})
+                    yield {
+                        "agent_decision": {
+                            "thought": node_output.get("thought"),
+                            "tool_calls": [
+                                tc.model_dump() if hasattr(tc, "model_dump") else tc
+                                for tc in node_output.get("tool_calls", [])
+                            ]
+                        }
+                    }
+
                 if node_name == "prepare_for_generation":
                     # 捕获 chain 和 prompt_input
                     node_output = event.get("prepare_for_generation", {})
                     chain = node_output.get("chain")
                     prompt_input = node_output.get("prompt_input")
                     print(f"DEBUG [astream]: Got chain={chain is not None}, prompt_input={prompt_input is not None}")
-                    
+
                     # 现在手动执行流式 LLM 调用
                     if chain and prompt_input:
                         print("DEBUG [astream]: Starting manual LLM streaming...")
@@ -633,19 +695,24 @@ class ChatFlow:
                         try:
                             async for chunk in chain.astream(prompt_input):
                                 chunk_count += 1
-                                # Normalize chunk to string
-                                if isinstance(chunk, str):
-                                    delta = chunk
-                                elif isinstance(chunk, dict):
-                                    delta = chunk.get('final_response', '')
-                                else:
-                                    delta = str(chunk)
-                                
-                                if delta:
-                                    print(f"DEBUG [astream]: Chunk #{chunk_count}: {delta!r}")
+                                # 拆分思维链增量与正文增量, 分别推送
+                                reasoning_delta, content_delta = _extract_stream_parts(chunk)
+
+                                if reasoning_delta:
                                     yield {
                                         "stream_response": {
-                                            "messages": [AIMessageChunk(content=delta, id="stream")]
+                                            "messages": [AIMessageChunk(
+                                                content="",
+                                                additional_kwargs={"reasoning_content": reasoning_delta},
+                                                id="stream"
+                                            )]
+                                        }
+                                    }
+                                if content_delta:
+                                    print(f"DEBUG [astream]: Chunk #{chunk_count}: {content_delta!r}")
+                                    yield {
+                                        "stream_response": {
+                                            "messages": [AIMessageChunk(content=content_delta, id="stream")]
                                         }
                                     }
                             print(f"DEBUG [astream]: LLM streaming finished. Total chunks: {chunk_count}")
@@ -653,7 +720,7 @@ class ChatFlow:
                             print(f"DEBUG [astream]: LLM streaming error: {e}")
                             import traceback
                             traceback.print_exc()
-                    
+
                     # 不再继续执行 stream_response 节点，因为我们已经手动处理了
                     break
                     
