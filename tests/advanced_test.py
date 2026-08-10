@@ -144,9 +144,9 @@ class TestCreateLlmReal:
     """测试 create_llm() 创建真实可用的 LLM 实例"""
 
     def test_create_llm_returns_chatopenai(self):
-        """create_llm() 返回 ChatOpenAI 实例"""
+        """create_llm() 返回 LangChain ChatModel 实例"""
         from aigility.model import create_llm
-        from langchain_openai import ChatOpenAI
+        from langchain_core.language_models.chat_models import BaseChatModel
 
         llm = create_llm(
             provider="deepseek",
@@ -154,7 +154,9 @@ class TestCreateLlmReal:
             api_key=DEEPSEEK_API_KEY,
             base_url=DEEPSEEK_BASE_URL,
         )
-        assert isinstance(llm, ChatOpenAI)
+        # 装了 langchain-deepseek 时返回 ChatDeepSeek（非 ChatOpenAI 子类），
+        # 未装时回退 ChatOpenAI，两者都是合法的 BaseChatModel
+        assert isinstance(llm, BaseChatModel)
 
     def test_create_llm_can_invoke(self):
         """create_llm() 创建的 LLM 可以真实调用"""
