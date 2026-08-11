@@ -536,6 +536,8 @@ def test_enabled_timem_provider_initializes_at_sdk_boundary(monkeypatch):
         {
             "api_key": "test-key",
             "base_url": "https://memory.example.test",
+            "timeout": 90.0,
+            "max_retries": 0,
         }
     ]
 

@@ -1,9 +1,17 @@
-import uuid
+from datetime import datetime, timezone
 import time
-from typing import List, Dict, Any, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
+from uuid import uuid4
+
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel as LangchainBaseModel, Field as LangchainField
 from langchain_core.runnables import RunnableConfig
+
+from ..conversation import (
+    ConversationContext,
+    ConversationSession,
+    ConversationSessionService,
+)
 from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
 from ..chatflow.flow import ChatFlow
@@ -13,35 +21,84 @@ class ChatService:
     """
     Chat 模块的服务层，负责处理聊天请求，并调用 ChatFlow。
     """
-    def __init__(self, adk_config: Optional[ADKConfig] = None, flow_config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        adk_config: Optional[ADKConfig] = None,
+        flow_config: Optional[Dict[str, Any]] = None,
+        session_service: Optional[ConversationSessionService] = None,
+    ):
         # 初始化配置
         self.adk_config = adk_config or ADKConfig()
         self.llm = ModelFactory.create_llm(self.adk_config)
-        
+        self.session_service = session_service or ConversationSessionService()
+
         # 初始化 ChatFlow
         self.chat_flow = ChatFlow(adk_config=self.adk_config, flow_config=flow_config)
 
-    def process_chat(self, request: ChatRequest) -> ChatResponse:
+    def _resolve_session(
+        self,
+        request: ChatRequest,
+        context: Optional[ConversationContext] = None,
+    ) -> ConversationSession:
+        """Resolve a server-issued session or support legacy direct calls.
+
+        Authenticated callers must supply ``context`` so the session service can
+        verify ownership. The context-free branch only preserves the historical
+        SDK entry point; it keeps a caller-supplied legacy ID opaque but does
+        not persist or authorize it.
+        """
+
+        if context is None:
+            now = datetime.now(timezone.utc)
+            return ConversationSession(
+                session_id=request.session_id or f"sess_{uuid4().hex}",
+                user_id="legacy-unauthenticated",
+                created_at=now,
+                updated_at=now,
+            )
+
+        return self.session_service.resolve_or_create(
+            user_id=context.user_id,
+            session_id=request.session_id,
+            idempotency_key=request.idempotency_key,
+        )
+
+    @staticmethod
+    def _build_runnable_config(
+        request: ChatRequest, session: ConversationSession
+    ) -> RunnableConfig:
+        """Provide the canonical session ID to LangGraph and future checkpointing."""
+
+        timem_kb_id = request.kb_id if request.kb_id else "kn1"
+        return RunnableConfig(
+            configurable={
+                "timem_kb_id": timem_kb_id,
+                "session_id": session.session_id,
+                "thread_id": session.session_id,
+            }
+        )
+
+    def process_chat(
+        self,
+        request: ChatRequest,
+        context: Optional[ConversationContext] = None,
+    ) -> ChatResponse:
         """
         处理聊天请求，调用 LangGraph ChatFlow。
 
         Args:
-            request: 包含用户输入和会话ID的请求对象。
+            request: 包含用户输入和可选服务端会话 ID 的请求对象。
+            context: 由认证边界构造的可信用户与 Agent 上下文。
 
         Returns:
             包含 AI 回复、建议和流程信息的响应对象。
         """
         start_time = time.perf_counter()
 
-        session_id = request.session_id if request.session_id else str(uuid.uuid4())
-        timem_kb_id = request.kb_id if request.kb_id else "kn1"
-        config = RunnableConfig(
-        configurable={
-            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
-        }
-    )
-        # 模拟历史记录的获取（当前版本简化为只处理当前请求）
-        # 在实际应用中，这里会从数据库或缓存中加载历史消息
+        session = self._resolve_session(request, context)
+        config = self._build_runnable_config(request, session)
+        # 历史存储与会话身份分离；未来的 MessageRepository 可按
+        # session.session_id 加载历史，而不会改变会话 ID 的语义。
         history = []
 
         # 调用 ChatFlow
@@ -85,13 +142,15 @@ class ChatService:
         build_start = time.perf_counter()
         response = ChatResponse(
             response=flow_result["response"],
-            session_id=session_id,
+            session_id=session.session_id,
             session_title=session_title,
             reply_suggestions=reply_suggestions,
             thought_process=flow_result.get("thought_process"),
             reasoning_content=flow_result.get("reasoning_content"),
             tool_results=tool_results_list
         )
+        if context is not None:
+            self.session_service.touch(session.session_id)
         build_elapsed = (time.perf_counter() - build_start) * 1
         total_elapsed = (time.perf_counter() - start_time) * 1
 
@@ -100,9 +159,13 @@ class ChatService:
 
         return response
 
-    async def process_chat_stream(self, request: ChatRequest):
+    async def process_chat_stream(
+        self,
+        request: ChatRequest,
+        context: Optional[ConversationContext] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        处理流式聊天请求。
+        处理流式聊天请求，并先发送 canonical session_id 元数据。
 
         透传 ChatFlow.astream 的事件，调用方按事件 key 与 additional_kwargs 区分:
         - {"agent_decision": {...}}      决策 thought 事件(一次性)
@@ -110,21 +173,22 @@ class ChatService:
             chunk.additional_kwargs 含 "reasoning_content" -> 思维链增量
             否则 chunk.content 为正文增量
         """
-        session_id = request.session_id if request.session_id else str(uuid.uuid4())
+        session = self._resolve_session(request, context)
         history = []
-        timem_kb_id = request.kb_id if request.kb_id else "kb_bb6a7f70f63a"
-        config = RunnableConfig(
-        configurable={
-            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
-        }
-    )
-        async for event in self.chat_flow.astream(
-            user_input=request.user_input,
-            history=history,
-            config=config,
-            rag_used=request.rag_used
-        ):
-            yield event
+        config = self._build_runnable_config(request, session)
+
+        yield {"conversation": {"session_id": session.session_id}}
+        try:
+            async for event in self.chat_flow.astream(
+                user_input=request.user_input,
+                history=history,
+                config=config,
+                rag_used=request.rag_used
+            ):
+                yield event
+        finally:
+            if context is not None:
+                self.session_service.touch(session.session_id)
 
     # --- 独立服务：生成会话标题 ---
 
@@ -238,6 +302,10 @@ if __name__ == "__main__":
 
     # 创建聊天服务
     chat_service = ChatService(adk_config=config)
+    demo_context = ConversationContext(
+        user_id="demo-user",
+        agent_id="demo-agent",
+    )
 
     # 测试用户输入
     test_query = "Mac的iCloud操作"
@@ -248,12 +316,12 @@ if __name__ == "__main__":
 
     chat_request_auto = ChatRequest(
         user_input=test_query,
-        session_id="1",
+        idempotency_key="demo-auto",
         kb_id=test_kb_id,
         rag_used="auto"
     )
 
-    chat_response_auto = chat_service.process_chat(chat_request_auto)
+    chat_response_auto = chat_service.process_chat(chat_request_auto, demo_context)
 
     print(f"\n📝 AI 回复: {chat_response_auto.response}")
     print(f"🆔 会话 ID: {chat_response_auto.session_id}")
@@ -264,12 +332,12 @@ if __name__ == "__main__":
 
     chat_request_on = ChatRequest(
         user_input=test_query,
-        session_id="2",
+        idempotency_key="demo-on",
         kb_id=test_kb_id,
         rag_used="on"
     )
 
-    chat_response_on = chat_service.process_chat(chat_request_on)
+    chat_response_on = chat_service.process_chat(chat_request_on, demo_context)
 
     print(f"\n📝 AI 回复: {chat_response_on.response}")
     print(f"🆔 会话 ID: {chat_response_on.session_id}")
@@ -280,12 +348,12 @@ if __name__ == "__main__":
 
     chat_request_off = ChatRequest(
         user_input=test_query,
-        session_id="3",
+        idempotency_key="demo-off",
         kb_id=test_kb_id,
         rag_used="off"
     )
 
-    chat_response_off = chat_service.process_chat(chat_request_off)
+    chat_response_off = chat_service.process_chat(chat_request_off, demo_context)
 
     print(f"\n📝 AI 回复: {chat_response_off.response}")
     print(f"🆔 会话 ID: {chat_response_off.session_id}")

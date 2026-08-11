@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 @dataclass
 class ADKConfig:
     """ADK 全局配置"""
+
     # LLM 配置
     llm_provider: str = "openai"  # openai, anthropic, etc.
     llm_model: str = "gpt-4"
@@ -28,9 +29,11 @@ class ADKConfig:
     
     # Memory 配置
     memory_enabled: bool = True
+    memory_provider: str = "timem"
     memory_api_key: Optional[str] = None
     memory_base_url: Optional[str] = None
-    
+    memory_options: Dict[str, Any] = field(default_factory=dict)
+
     # Knowledge 配置
     knowledge_enabled: bool = True
     knowledge_store_type: str = "vector"  # vector, graph, hybrid
@@ -43,27 +46,25 @@ class ADKConfig:
     # 工作流配置
     workflow_timeout: float = 300.0
     workflow_max_steps: int = 50
-    
+
     # HTTP 配置
     http_timeout: float = 60.0
     http_max_retries: int = 3
     http_verify_ssl: bool = False
-    
+
     # 其他配置
     debug: bool = False
     log_level: str = "INFO"
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return {
-            k: v for k, v in self.__dict__.items()
-            if not k.startswith("_")
-        }
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
 
 
 @dataclass
 class AgentConfig:
     """智能体配置"""
+
     name: str
     description: str
     prompt_template: Optional[str] = None
@@ -77,6 +78,7 @@ class AgentConfig:
 @dataclass
 class ToolConfig:
     """工具配置"""
+
     name: str
     description: str
     schema: Dict[str, Any]
@@ -84,4 +86,3 @@ class ToolConfig:
     timeout: float = 30.0
     max_retries: int = 3
     metadata: Dict[str, Any] = field(default_factory=dict)
-

@@ -1,237 +1,213 @@
-"""
-Memory 高级接口
-
-提供简化的记忆管理接口，基于 Provider 架构实现。
-
-使用示例:
-    from aigility.memory import Memory, MemoryConfig, MemoryProviderConfig
-
-    # 方式1: 使用默认配置
-    memory = Memory()
-
-    # 方式2: 传入配置对象
-    config = MemoryConfig(
-        provider=MemoryProviderConfig(
-            provider="timem",
-            api_key="sk-xxx"
-        )
-    )
-    memory = Memory(config=config)
-
-    # 方式3: 环境变量配置
-    # export TIMEM_API_KEY=sk-xxx
-    config = MemoryConfig()
-    memory = Memory(config=config)
-"""
+"""Public façade for provider-neutral long-term memory operations."""
 
 import logging
-from typing import Optional, Dict, Any, List, Union
+from typing import Any, Dict, List, Mapping, Optional, TypeVar, Union
+
 from .config import MemoryConfig
-from .providers.factory import MemoryProviderFactory
+from .contracts import (
+    ConversationScope,
+    MemoryCapabilities,
+    MemoryError,
+    MemoryIdentity,
+    MemoryProviderError,
+    MemorySearchRequest,
+    MemorySearchResult,
+    MemoryStatus,
+    MemoryWriteRequest,
+    MemoryWriteResult,
+)
 from .providers.base import BaseMemoryProvider
+from .providers.factory import MemoryProviderFactory
 
 logger = logging.getLogger(__name__)
 
+MemoryOperationResult = TypeVar(
+    "MemoryOperationResult", MemoryWriteResult, MemorySearchResult
+)
+
 
 class Memory:
-    """
-    记忆管理类
+    """A stable memory façade over a pluggable provider registry.
 
-    提供简化的 API 接口，内部使用 Provider 架构。
-    支持多种 Memory Provider（如 Timem）。
-
-    设计模式参考 RAG 模块：
-    - 外部传入 Config 对象
-    - 如果不传则使用默认配置
-    - 通过工厂模式创建 Provider
+    New integrations should use :meth:`write` and :meth:`retrieve` with the
+    contracts in ``aigility.memory.contracts``.  ``add`` and ``search`` stay as
+    compatibility helpers and return dictionaries for existing callers.
     """
 
-    def __init__(self, config: MemoryConfig):
-        """
-        初始化 Memory 实例
-
-        Args:
-            config: Memory 配置对象（必须传入）
-
-        Examples:
-            >>> from aigility.memory import Memory, MemoryConfig
-            >>>
-            >>> # 使用默认配置（从环境变量读取 TIMEM_API_KEY）
-            >>> config = MemoryConfig()
-            >>> memory = Memory(config=config)
-            >>>
-            >>> # 使用自定义配置
-            >>> config = MemoryConfig(
-            ...     provider=MemoryProviderConfig(
-            ...         provider="timem",
-            ...         api_key="sk-xxx"
-            ...     )
-            ... )
-            >>> memory = Memory(config=config)
-        """
-        if not isinstance(config, MemoryConfig):
+    def __init__(self, config: Optional[MemoryConfig] = None):
+        if config is not None and not isinstance(config, MemoryConfig):
             raise TypeError(
-                f"config 必须是 MemoryConfig 类型，获取到: {type(config)}"
+                "config 必须是 MemoryConfig 类型，" f"获取到: {type(config)}"
             )
 
-        self.config = config
-
-        logger.info(
-            f"Initializing Memory with: Provider={self.config.provider.provider}"
-        )
-
-        # 使用工厂模式创建 Provider
-        self._provider: Union[BaseMemoryProvider, None] = None
+        self.config = config or MemoryConfig()
+        self._provider: Optional[BaseMemoryProvider] = None
+        self._initialization_error: Optional[MemoryError] = None
         self._initialize_provider()
 
-    def _initialize_provider(self):
-        """初始化 Provider（使用工厂模式）"""
+    @property
+    def provider_name(self) -> str:
+        return self.config.provider.provider
+
+    @property
+    def capabilities(self) -> MemoryCapabilities:
+        if self._provider:
+            return self._provider.capabilities
+        return MemoryCapabilities(
+            conversation_write=False,
+            semantic_search=False,
+        )
+
+    def _initialize_provider(self) -> None:
         if not self.config.provider.enabled:
-            logger.info("Memory Provider is disabled")
+            self._initialization_error = MemoryError(
+                code="provider_disabled",
+                message="Memory provider 未启用",
+            )
             return
 
         self._provider = MemoryProviderFactory.create_provider(self.config.provider)
-        logger.info(f"Memory Provider initialized: {self.config.provider.provider}")
-    
+        logger.info(
+            "Memory provider initialized: provider=%s",
+            self.config.provider.provider,
+        )
+
+    async def write(self, request: MemoryWriteRequest) -> MemoryWriteResult:
+        """Persist memory through the configured provider."""
+
+        if not self._provider:
+            result = MemoryWriteResult(
+                status=(
+                    MemoryStatus.DISABLED
+                    if not self.config.provider.enabled
+                    else MemoryStatus.FAILED
+                ),
+                provider=self.provider_name,
+                error=self._initialization_error
+                or MemoryError(
+                    code="provider_unavailable",
+                    message="Memory provider 不可用",
+                ),
+            )
+            return self._apply_failure_mode(result)
+
+        result = await self._provider.write(request)
+        return self._apply_failure_mode(result)
+
+    async def retrieve(self, request: MemorySearchRequest) -> MemorySearchResult:
+        """Retrieve memory through the configured provider."""
+
+        if not self._provider:
+            result = MemorySearchResult(
+                status=(
+                    MemoryStatus.DISABLED
+                    if not self.config.provider.enabled
+                    else MemoryStatus.FAILED
+                ),
+                provider=self.provider_name,
+                error=self._initialization_error
+                or MemoryError(
+                    code="provider_unavailable",
+                    message="Memory provider 不可用",
+                ),
+            )
+            return self._apply_failure_mode(result)
+
+        result = await self._provider.retrieve(request)
+        return self._apply_failure_mode(result)
+
+    def _apply_failure_mode(
+        self, result: MemoryOperationResult
+    ) -> MemoryOperationResult:
+        if not result.success and self.config.failure_mode == "raise":
+            raise MemoryProviderError(result)
+        return result
+
     async def add(
         self,
         messages: List[Dict[str, str]],
-        user_id: Union[str, int] = "default_user",
+        user_id: Optional[Union[str, int]] = None,
         character_id: Optional[str] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        provider_options: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Backward-compatible dictionary wrapper around :meth:`write`.
+
+        ``character_id`` remains an alias for ``agent_id`` for compatibility
+        with TiMEM callers.  A write always requires a real session identifier;
+        the façade never invents one from a user identifier.
         """
-        添加对话记忆
 
-        Args:
-            messages: 对话消息列表
-            user_id: 用户ID
-            character_id: 角色ID
-            session_id: 会话ID
+        identity = self._build_identity(user_id, agent_id, character_id)
+        if session_id is None:
+            raise ValueError("session_id 必须提供")
 
-        Returns:
-            添加结果
-        """
-        if not self._provider:
-            return {
-                "success": False,
-                "error": "Provider 未启用或初始化失败",
-                "memories": [],
-                "total": 0
-            }
-
-        if not messages:
-            raise ValueError("messages 不能为空")
-
-        if not character_id:
-            raise ValueError("character_id 必须提供")
-
-        if not session_id:
-            import hashlib
-            session_id = f"session_{hashlib.md5(str(user_id).encode()).hexdigest()[:8]}"
-
-        # 调用 Provider 的 add_memory 方法
-        result = await self._provider.add_memory(
-            messages=messages,
-            user_id=str(user_id),
-            character_id=character_id,
-            session_id=session_id
+        result = await self.write(
+            MemoryWriteRequest(
+                messages=messages,
+                scope=ConversationScope(identity=identity, session_id=session_id),
+                metadata=metadata or {},
+                provider_options=provider_options or {},
+            )
         )
+        return result.to_dict()
 
-        if result is None:
-            return {
-                "success": False,
-                "error": "添加记忆失败",
-                "memories": [],
-                "total": 0
-            }
-
-        # 解析返回结果
-        memories = result.get("memories", [])
-        memory_ids = result.get("memory_ids", [])
-
-        return {
-            "success": result.get("success", True),
-            "memories": memories,
-            "memory_id": result.get("memory_id"),
-            "memory_ids": memory_ids,
-            "total": result.get("total", len(memories)),
-            "message": result.get("message", "")
-        }
-    
     async def search(
         self,
         query: str,
-        user_id: Union[str, int] = "default_user",
+        user_id: Optional[Union[str, int]] = None,
         limit: int = 10,
         character_id: Optional[str] = None,
-        include_context: bool = False
+        include_context: bool = False,
+        agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        filters: Optional[Mapping[str, Any]] = None,
+        provider_options: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        搜索相关记忆
+        """Backward-compatible dictionary wrapper around :meth:`retrieve`."""
 
-        Args:
-            query: 搜索查询文本
-            user_id: 用户ID
-            limit: 返回结果数量限制
-            character_id: 角色ID
-            include_context: 是否包含上下文信息
-
-        Returns:
-            搜索结果
-        """
-        if not self._provider:
-            return {
-                "results": [],
-                "total": 0,
-                "query": query,
-                "error": "Provider 未启用或初始化失败"
-            }
-
-        # 调用 Provider 的 search_memories 方法
-        memories = await self._provider.search_memories(
-            query_text=query,
-            user_id=str(user_id),
-            character_id=character_id,
-            limit=limit
+        identity = self._build_identity(user_id, agent_id, character_id)
+        result = await self.retrieve(
+            MemorySearchRequest(
+                query=query,
+                identity=identity,
+                limit=limit,
+                session_id=session_id,
+                filters=filters or {},
+                include_context=include_context,
+                provider_options=provider_options or {},
+            )
         )
+        return result.to_dict(query=query)
 
-        # 格式化结果
-        formatted_results = []
-        for mem in memories[:limit] if limit else memories:
-            # 从不同结构中提取记忆文本
-            memory_text = mem.get("memory", mem.get("content", ""))
-            if not memory_text and isinstance(mem.get("data"), dict):
-                memory_text = mem["data"].get("memory", "")
+    @staticmethod
+    def _build_identity(
+        user_id: Optional[Union[str, int]],
+        agent_id: Optional[str],
+        character_id: Optional[str],
+    ) -> MemoryIdentity:
+        if agent_id and character_id and agent_id != character_id:
+            raise ValueError("agent_id 与 character_id 必须一致")
+        resolved_agent_id = agent_id or character_id
+        if user_id is None:
+            raise ValueError("user_id 必须提供")
+        if not resolved_agent_id:
+            raise ValueError("agent_id 必须提供（character_id 可作为兼容别名）")
+        return MemoryIdentity(user_id=str(user_id), agent_id=resolved_agent_id)
 
-            metadata = mem.get("metadata", {})
-            score = metadata.get("score", mem.get("score", 0.0))
+    async def close(self) -> None:
+        """Release the configured provider's resources."""
 
-            formatted_results.append({
-                "memory": memory_text,
-                "score": score,
-                "id": mem.get("id"),
-                "layer": mem.get("layer"),
-                "metadata": metadata,
-                "created_at": mem.get("created_at"),
-                "updated_at": mem.get("updated_at"),
-            })
-
-        return {
-            "results": formatted_results,
-            "total": len(formatted_results),
-            "query": query
-        }
-    
-    async def close(self):
-        """关闭客户端连接"""
         if self._provider:
             await self._provider.close()
-    
-    async def __aenter__(self):
-        """异步上下文管理器入口"""
+
+    async def __aenter__(self) -> "Memory":
         return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """异步上下文管理器出口"""
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.close()
+
+
+__all__ = ["Memory"]
