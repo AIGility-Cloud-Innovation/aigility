@@ -4,7 +4,14 @@ from typing import List, Optional, Literal
 class ChatRequest(BaseModel):
     """用户发送的聊天请求模型"""
     user_input: str = Field(..., description="用户输入的文本内容")
-    session_id: Optional[str] = Field(None, description="会话ID，用于恢复历史记录")
+    session_id: Optional[str] = Field(
+        None,
+        description="服务端签发的会话 ID；缺失时创建新的唯一会话",
+    )
+    idempotency_key: Optional[str] = Field(
+        None,
+        description="创建新会话时的可选幂等键；不会影响 session_id 的生成",
+    )
     kb_id: Optional[str] = Field(None, description="知识库ID，用于指定RAG检索的知识库")
     rag_used: Literal["auto", "on", "off"] = Field(
         default="auto",

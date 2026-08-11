@@ -4,25 +4,30 @@ ADK 主客户端
 提供统一的客户端接口，使用 Builder 模式。
 """
 
-from typing import Optional, Dict, Any
+from __future__ import annotations
+
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from .core.config import ADKConfig
-from .memory import Memory
-from .chat import ChatAgent
-from .chatflow import ChatFlow
-from .workflow import WorkflowEngine
-from .adp import ADPClient
+from .memory import Memory, MemoryConfig, MemoryProviderConfig
+
+if TYPE_CHECKING:
+    from .adp import ADPClient
+    from .chat import ChatAgent
+    from .chatflow import ChatFlow
+    from .workflow import WorkflowEngine
+
 
 class ADKClient:
     """
     ADK 主客户端
-    
+
     提供统一的接口访问所有 ADK 功能模块。
     """
-    
+
     def __init__(self, config: Optional[ADKConfig] = None):
         """
         初始化 ADK 客户端
-        
+
         Args:
             config: ADK 配置
         """
@@ -30,22 +35,30 @@ class ADKClient:
 
         # 初始化各模块
         self._memory: Optional[Memory] = None
-    
+
     @property
-    def memory(self) -> Memory:
+    def memory(self) -> Optional[Memory]:
         """获取记忆模块"""
         if self._memory is None and self.config.memory_enabled:
+            provider_options = dict(getattr(self.config, "memory_options", {}) or {})
+            timeout_seconds = provider_options.pop("timeout_seconds", 90.0)
+            max_retries = provider_options.pop("max_retries", 0)
             self._memory = Memory(
-                api_key=self.config.memory_api_key,
-                base_url=self.config.memory_base_url,
+                config=MemoryConfig(
+                    provider=MemoryProviderConfig(
+                        provider=getattr(self.config, "memory_provider", "timem"),
+                        api_key=self.config.memory_api_key,
+                        base_url=self.config.memory_base_url,
+                        enabled=self.config.memory_enabled,
+                        timeout_seconds=timeout_seconds,
+                        max_retries=max_retries,
+                        kwargs=provider_options,
+                    )
+                )
             )
         return self._memory
-    
-    def create_chat_agent(
-        self,
-        name: str,
-        **kwargs
-    ) -> ChatAgent:
+
+    def create_chat_agent(self, name: str, **kwargs) -> ChatAgent:
         """创建对话智能体"""
         from .chat import create_chat_agent
         return create_chat_agent(name=name, adk_config=self.config, **kwargs)
@@ -66,23 +79,23 @@ class ADKClient:
     ) -> WorkflowEngine:
         """创建工作流"""
         from .workflow import create_workflow_engine
+
         return create_workflow_engine(name=name, **kwargs)
-    
+
     def create_adp_client(
-        self,
-        base_url: str,
-        api_key: Optional[str] = None,
-        **kwargs
+        self, base_url: str, api_key: Optional[str] = None, **kwargs
     ) -> "ADPClient":
         """
         创建远程 ADP 服务客户端
-        
+
         Args:
             base_url: ADP 服务地址
             api_key: API Key
             **kwargs: 其他配置
         """
-        
+
+        from .adp import ADPClient
+
         return ADPClient(base_url=base_url, api_key=api_key, **kwargs)
 
     async def close(self):
@@ -93,17 +106,17 @@ class ADKClient:
 
 class ADKClientBuilder:
     """ADK 客户端构建器"""
-    
+
     def __init__(self):
         self.config = ADKConfig()
-    
+
     def with_llm(
         self,
         provider: str = "openai",
         model: str = "gpt-4",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> "ADKClientBuilder":
         """配置 LLM"""
         self.config.llm_provider = provider
@@ -111,17 +124,21 @@ class ADKClientBuilder:
         self.config.llm_api_key = api_key
         self.config.llm_base_url = base_url
         return self
-    
+
     def with_memory(
         self,
+        provider: str = "timem",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        enabled: bool = True
+        enabled: bool = True,
+        **kwargs,
     ) -> "ADKClientBuilder":
-        """配置记忆"""
+        """配置可插拔的记忆 Provider。"""
         self.config.memory_enabled = enabled
+        self.config.memory_provider = provider
         self.config.memory_api_key = api_key
         self.config.memory_base_url = base_url
+        self.config.memory_options = dict(kwargs)
         return self
 
     def with_rag(
@@ -150,10 +167,7 @@ class ADKClientBuilder:
         return self
 
     def with_http(
-        self,
-        timeout: float = 60.0,
-        max_retries: int = 3,
-        verify_ssl: bool = False
+        self, timeout: float = 60.0, max_retries: int = 3, verify_ssl: bool = False
     ) -> "ADKClientBuilder":
         """配置 HTTP"""
         self.config.http_timeout = timeout
@@ -166,7 +180,7 @@ class ADKClientBuilder:
         self.config.debug = enabled
         self.config.log_level = "DEBUG" if enabled else "INFO"
         return self
-    
+
     def build(self) -> ADKClient:
         """构建客户端"""
         return ADKClient(config=self.config)
@@ -185,10 +199,20 @@ def create_client(**kwargs) -> ADKClient:
     builder = ADKClientBuilder()
 
     if "llm_provider" in kwargs:
-        builder.with_llm(**{k.replace("llm_", ""): v for k, v in kwargs.items() if k.startswith("llm_")})
+        builder.with_llm(
+            **{
+                k.replace("llm_", ""): v
+                for k, v in kwargs.items()
+                if k.startswith("llm_")
+            }
+        )
 
-    if "memory_api_key" in kwargs:
-        builder.with_memory(**{k.replace("memory_", ""): v for k, v in kwargs.items() if k.startswith("memory_")})
+    memory_kwargs = {
+        k.replace("memory_", ""): v
+        for k, v in kwargs.items()
+        if k.startswith("memory_")
+    }
+    if memory_kwargs:
+        builder.with_memory(**memory_kwargs)
 
     return builder.build()
-

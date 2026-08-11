@@ -1,12 +1,8 @@
-"""
-AIGility ADK - Agent Development Kit
+"""AIGility ADK.
 
-基于 LangGraph/LangChain 的智能体开发框架，提供：
-- chat: 基础对话能力
-- chatflow: 对话流管理
-- workflow: 工作流引擎
-- rag: RAG 检索增强生成
-- memory: 记忆管理
+Top-level imports are deliberately lazy so an optional subsystem such as RAG
+does not prevent a standalone subsystem such as ``aigility.memory`` from being
+used or tested.
 """
 
 from importlib import import_module
@@ -18,7 +14,7 @@ __email__ = "contact@aigility.com"
 __description__ = "Agent Development Kit - 智能体开发框架"
 
 if TYPE_CHECKING:
-    from . import chat, chatflow, memory, rag, workflow
+    from . import chat, chatflow, conversation, memory, rag, workflow
     from .client import ADKClient, ADKClientBuilder, create_client
 
 
@@ -27,6 +23,7 @@ _LAZY_EXPORTS = {
     "ADKClientBuilder": (".client", "ADKClientBuilder"),
     "create_client": (".client", "create_client"),
     "memory": (".memory", None),
+    "conversation": (".conversation", None),
     "chat": (".chat", None),
     "chatflow": (".chatflow", None),
     "workflow": (".workflow", None),
@@ -50,19 +47,15 @@ def __dir__():
     return sorted(set(globals()) | set(__all__))
 
 __all__ = [
-    # 主客户端
     "ADKClient",
     "ADKClientBuilder",
     "create_client",
-
-    # 模块
     "memory",
+    "conversation",
     "chat",
     "chatflow",
     "workflow",
     "rag",
-
-    # 元信息
     "__version__",
     "__author__",
     "__email__",
