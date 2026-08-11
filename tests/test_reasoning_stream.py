@@ -252,7 +252,10 @@ class TestChatAgent:
     async def test_invoke_surfaces_reasoning_content(self, fake_llm, off_config):
         with mock.patch.object(ModelFactory, "create_llm", return_value=fake_llm):
             agent = ChatAgent(name="t", adk_config=off_config)
-            state = State(messages=[Message(role=MessageRole.USER, content="哪个大?")])
+            state = State(
+                messages=[Message(role=MessageRole.USER, content="哪个大?")],
+                metadata={"kb_id": "kb-test"},
+            )
             resp = await agent.invoke(state)
 
         assert resp.content == fake_llm.content

@@ -7,6 +7,7 @@ from aigility.conversation import (
     ConversationSessionOwnershipError,
     ConversationSessionService,
 )
+from aigility.core.config import ADKConfig
 
 
 class FakeChatFlow:
@@ -29,16 +30,50 @@ class FakeChatFlow:
 
 def make_chat_service():
     service = ChatService.__new__(ChatService)
+    service.adk_config = ADKConfig()
     service.chat_flow = FakeChatFlow()
     service.session_service = ConversationSessionService()
     return service
+
+
+def test_runnable_config_keeps_kb_id_rules_and_canonical_session_id():
+    service = make_chat_service()
+    context = ConversationContext(user_id="user-a", agent_id="agent-a")
+    session = service.session_service.resolve_or_create(user_id=context.user_id)
+
+    service.adk_config.timem_kb_id = "kb-from-config"
+    config = service._build_runnable_config(
+        ChatRequest(user_input="hello", rag_used="auto"), session
+    )
+    assert config["configurable"]["timem_kb_id"] == "kb-from-config"
+    assert config["configurable"]["session_id"] == session.session_id
+    assert config["configurable"]["thread_id"] == session.session_id
+
+    override = service._build_runnable_config(
+        ChatRequest(user_input="hello", rag_used="auto", kb_id="kb-from-request"),
+        session,
+    )
+    assert override["configurable"]["timem_kb_id"] == "kb-from-request"
+
+    service.adk_config.timem_kb_id = None
+    with pytest.raises(ValueError, match="未提供 kb_id"):
+        service._build_runnable_config(
+            ChatRequest(user_input="hello", rag_used="auto"), session
+        )
+
+    disabled = service._build_runnable_config(
+        ChatRequest(user_input="hello", rag_used="off"), session
+    )
+    assert disabled["configurable"]["timem_kb_id"] is None
 
 
 def test_chat_creates_one_canonical_session_and_passes_it_to_flow_config():
     service = make_chat_service()
     context = ConversationContext(user_id="user-a", agent_id="agent-a")
 
-    response = service.process_chat(ChatRequest(user_input="hello"), context)
+    response = service.process_chat(
+        ChatRequest(user_input="hello", rag_used="off"), context
+    )
 
     call = service.chat_flow.invoke_calls[0]
     configurable = call["config"]["configurable"]
@@ -54,11 +89,15 @@ def test_chat_reuses_session_only_for_its_owner():
     service = make_chat_service()
     owner = ConversationContext(user_id="user-a", agent_id="agent-a")
     other_user = ConversationContext(user_id="user-b", agent_id="agent-a")
-    created = service.process_chat(ChatRequest(user_input="first"), owner)
+    created = service.process_chat(ChatRequest(user_input="first", rag_used="off"), owner)
 
     with pytest.raises(ConversationSessionOwnershipError):
         service.process_chat(
-            ChatRequest(user_input="attempt", session_id=created.session_id),
+            ChatRequest(
+                user_input="attempt",
+                session_id=created.session_id,
+                rag_used="off",
+            ),
             other_user,
         )
 
@@ -73,7 +112,7 @@ async def test_stream_emits_the_canonical_session_before_content_events():
     events = [
         event
         async for event in service.process_chat_stream(
-            ChatRequest(user_input="hello"), context
+            ChatRequest(user_input="hello", rag_used="off"), context
         )
     ]
 

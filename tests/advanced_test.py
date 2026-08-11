@@ -720,6 +720,7 @@ class TestChatAgentKbId:
         with pytest.raises(ValueError, match="未提供 kb_id"):
             agent.chat("测试问题", rag_used="on")
 
+    @requires_deepseek
     def test_chat_no_error_when_rag_off_without_kb_id(self):
         """rag_used='off' 时不传 kb_id 不会报错"""
         from aigility.chat.agent import ChatAgent
@@ -750,6 +751,7 @@ class TestChatAgentKbId:
         sig = inspect.signature(ChatAgent.chat)
         assert sig.parameters['kb_id'].default is None
 
+    @requires_deepseek
     def test_chat_with_kb_id_no_rag_config(self):
         """传入 kb_id 但未配置 RAG 服务时，纯对话正常完成"""
         from aigility.chat.agent import ChatAgent
@@ -761,6 +763,7 @@ class TestChatAgentKbId:
         assert len(response) > 0
         print(f"\n  [chat+kb_id+off] 模型回复: {response}")
 
+    @requires_deepseek
     def test_chat_without_kb_id_still_works(self):
         """不传 kb_id 时仍然正常工作（向后兼容）"""
         from aigility.chat.agent import ChatAgent
@@ -772,6 +775,7 @@ class TestChatAgentKbId:
         assert len(response) > 0
         print(f"\n  [chat-no-kb_id] 模型回复: {response}")
 
+    @requires_deepseek
     def test_adk_config_kb_id_as_default(self):
         """adk_config.timem_kb_id 作为 chat() 的默认 kb_id"""
         from aigility.chat.agent import ChatAgent
@@ -784,6 +788,7 @@ class TestChatAgentKbId:
         assert isinstance(response, str)
         assert len(response) > 0
 
+    @requires_deepseek
     def test_chat_kb_id_overrides_config(self):
         """chat() 传入的 kb_id 优先于 adk_config.timem_kb_id"""
         from aigility.chat.agent import ChatAgent
@@ -795,6 +800,7 @@ class TestChatAgentKbId:
         assert isinstance(response, str)
         assert len(response) > 0
 
+    @requires_deepseek
     def test_invoke_reads_kb_id_from_state_metadata(self):
         """invoke() 从 state.metadata 读取 kb_id"""
         from aigility.chat.agent import ChatAgent
@@ -817,6 +823,7 @@ class TestChatAgentKbId:
 # 12. ChatAgent RAG 真实调用测试（需要 TimeM 服务）
 # ============================================================
 
+@requires_deepseek
 @pytest.mark.skipif(not TIMEM_ENABLED, reason="TIMEM_ENABLED=false，跳过 RAG 真实调用测试")
 @pytest.mark.skipif(not TIMEM_API_KEY, reason="无 TIMEM_API_KEY")
 class TestChatAgentRAGReal:
@@ -988,6 +995,7 @@ class TestADKClientBuilderImport:
 # 14. ChatService kb_id 默认值测试
 # ============================================================
 
+@requires_deepseek
 class TestChatServiceKbId:
     """测试 ChatService 使用 adk_config.timem_kb_id 作为默认值"""
 
@@ -1033,6 +1041,7 @@ class TestChatServiceKbId:
 # 15. ChatFlow 通过 RunnableConfig 传递 kb_id 测试
 # ============================================================
 
+@requires_deepseek
 class TestChatFlowKbIdConfig:
     """测试 ChatFlow.invoke() 通过 RunnableConfig 传递 kb_id"""
 
