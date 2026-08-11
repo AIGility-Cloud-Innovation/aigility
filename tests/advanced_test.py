@@ -30,6 +30,10 @@ ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 ZHIPUAI_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPUAI_MODEL = "glm-4-flash"
 
+# 无 DeepSeek 凭据时（如 CI 未配置 secret）跳过真实调用测试
+requires_deepseek = pytest.mark.skipif(
+    not DEEPSEEK_API_KEY, reason="无 DEEPSEEK_API_KEY，跳过 DeepSeek 真实调用测试"
+)
 # TimeM RAG 配置（从 .env 读取）
 TIMEM_ENABLED = os.getenv("TIMEM_ENABLED", "false").lower() == "true"
 TIMEM_API_KEY = os.getenv("TIMEM_API_KEY")
