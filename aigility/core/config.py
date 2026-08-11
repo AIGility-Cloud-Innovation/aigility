@@ -19,6 +19,12 @@ class ADKConfig:
     llm_base_url: Optional[str] = None
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2000
+
+    # Reasoning (思维链) 配置
+    # 注意: 开关需与模型能力匹配。普通模型开启可能被 API 拒绝(400)；
+    # 纯推理模型(deepseek-reasoner/o1 等)关闭无效, 思考由模型侧强制执行。
+    llm_reasoning: bool = False  # 是否启用推理模型的思维链模式(如 deepseek-v4 系列 / OpenAI o 系列)
+    llm_reasoning_effort: Optional[str] = None  # OpenAI o 系列专用: "low" | "medium" | "high"
     
     # Memory 配置
     memory_enabled: bool = True

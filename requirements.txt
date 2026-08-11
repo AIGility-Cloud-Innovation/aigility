@@ -1,39 +1,11 @@
 # ============================================================
 # AIGility 核心依赖 (Core Dependencies)
 # ============================================================
-# 这个文件包含 AIGility 的核心依赖，安装速度最快
-# 只包含聊天、工作流、内存管理等基础功能
+# 依赖的单一事实源是 pyproject.toml，本文件仅作委托。
+# 从源码目录执行 pip install -r requirements.txt 等价于
+# 以可编辑模式安装核心依赖。
 #
 # 完整安装请使用: pip install "aigility[all]"
 # 或使用: pip install -r requirements-full.txt
 # ============================================================
-
-# HTTP 客户端
-httpx>=0.24.0
-httpx-sse>=0.4.0
-
-# 数据验证
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-
-# 类型支持
-typing-extensions>=4.0.0
-
-# LangChain 核心
-langchain-core>=0.1.0
-
-# LangGraph (工作流引擎)
-langgraph>=0.0.20
-
-# LLM 提供商
-langchain-openai>=0.0.5
-
-# YAML 配置解析
-pyyaml>=6.0
-rank_bm25>=0.2.0
-# Markdown AST 解析（用于智能文档切分）
-markdown-it-py>=3.0.0
-dashscope>=0.1.0
-
-# PDF 解析（可选）
-pypdf>=3.0.0
+-e .

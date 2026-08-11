@@ -4,12 +4,15 @@ Chat Agent
 基于 ChatFlow 的对话智能体，提供简化的 Agent 入口。
 """
 
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from typing import Optional, List, Dict, Any
 from langchain_core.runnables import RunnableConfig
 from ..core.base import BaseAgent
 from ..core.types import State, Message, AgentResponse, MessageRole
 from ..core.config import ADKConfig, AgentConfig
-from ..chatflow.flow import ChatFlow
+
+if TYPE_CHECKING:
+    from ..chatflow.flow import ChatFlow
 
 
 class ChatAgent(BaseAgent):
@@ -38,9 +41,11 @@ class ChatAgent(BaseAgent):
         self._chat_flow: Optional[ChatFlow] = None
 
     @property
-    def chat_flow(self) -> ChatFlow:
-        """懒加载 ChatFlow 实例"""
+    def chat_flow(self) -> "ChatFlow":
+        """懒加载 ChatFlow 实例（延迟导入以保持可选依赖边界）"""
         if self._chat_flow is None:
+            from ..chatflow.flow import ChatFlow
+
             self._chat_flow = ChatFlow(
                 name=self.name,
                 adk_config=self.adk_config,
@@ -150,6 +155,7 @@ class ChatAgent(BaseAgent):
             content=result["response"],
             metadata={
                 "thought_process": result.get("thought_process"),
+                "reasoning_content": result.get("reasoning_content"),
                 "tool_results": [
                     {"tool_name": tr.tool_name, "result": tr.result}
                     for tr in (result.get("tool_results") or [])
