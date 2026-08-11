@@ -34,10 +34,19 @@ class ChatService:
         start_time = time.perf_counter()
 
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
-        timem_kb_id = request.kb_id if request.kb_id else "kn1"
+        # kb_id 必传校验（RAG 模式下）
+        if request.rag_used != "off":
+            timem_kb_id = request.kb_id or self.adk_config.timem_kb_id
+            if not timem_kb_id:
+                raise ValueError(
+                    f"rag_used='{request.rag_used}' 但未提供 kb_id。"
+                    f"请在 ChatRequest 中设置 kb_id，或在 ADKConfig.timem_kb_id 中设置默认值。"
+                )
+        else:
+            timem_kb_id = request.kb_id or self.adk_config.timem_kb_id
         config = RunnableConfig(
         configurable={
-            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
+            "timem_kb_id": timem_kb_id  # 优先用 request 中的 kb_id，否则用 adk_config 的默认值
         }
     )
         # 模拟历史记录的获取（当前版本简化为只处理当前请求）
@@ -112,10 +121,19 @@ class ChatService:
         """
         session_id = request.session_id if request.session_id else str(uuid.uuid4())
         history = []
-        timem_kb_id = request.kb_id if request.kb_id else "kb_bb6a7f70f63a"
+        # kb_id 必传校验（RAG 模式下）
+        if request.rag_used != "off":
+            timem_kb_id = request.kb_id or self.adk_config.timem_kb_id
+            if not timem_kb_id:
+                raise ValueError(
+                    f"rag_used='{request.rag_used}' 但未提供 kb_id。"
+                    f"请在 ChatRequest 中设置 kb_id，或在 ADKConfig.timem_kb_id 中设置默认值。"
+                )
+        else:
+            timem_kb_id = request.kb_id or self.adk_config.timem_kb_id
         config = RunnableConfig(
         configurable={
-            "timem_kb_id": timem_kb_id # 这里拿到了"商家对应在太忆云的KB ID"
+            "timem_kb_id": timem_kb_id  # 优先用 request 中的 kb_id，否则用 adk_config 的默认值
         }
     )
         async for event in self.chat_flow.astream(

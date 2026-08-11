@@ -103,6 +103,7 @@ asyncio.run(main())
 ```python
 from aigility import ADKClientBuilder
 
+# 纯对话客户端
 client = (
     ADKClientBuilder()
     .with_llm(provider="deepseek", model="deepseek-chat", api_key="sk-xxx",
@@ -112,10 +113,35 @@ client = (
     .build()
 )
 
+# 带 RAG 的客户端
+client = (
+    ADKClientBuilder()
+    .with_llm(provider="deepseek", model="deepseek-chat", api_key="sk-xxx",
+              base_url="https://api.deepseek.com")
+    .with_rag(
+        enabled=True,
+        api_key="timem-xxx",
+        base_url="https://api.timem.cloud",
+        kb_id="kb_xxx",            # 默认知识库 ID（可在 chat() 中覆盖）
+    )
+    .with_debug(enabled=True)
+    .build()
+)
+
 # 通过 ChatAgent 进行对话（推荐）
 agent = client.create_chat_agent("my_agent")
+
+# 纯对话
 response = agent.chat("你好", rag_used="off")
 print(response)  # AI 回复文本
+
+# 带 RAG 的对话（传入 kb_id）
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto", kb_id="kb_xxx")
+print(response)
+
+# 如果 Builder 中已设置了默认 kb_id，可以不传 kb_id
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto")
+print(response)
 
 # 也可以通过 ChatFlow 进行对话
 chatflow = client.create_chatflow("my_flow")
@@ -234,6 +260,7 @@ config = ADKConfig(
     timem_enabled=False,            # 是否启用 TimeM RAG
     timem_api_key=None,             # TimeM API Key
     timem_base_url=None,            # TimeM Base URL
+    timem_kb_id=None,               # 默认知识库 ID（可在调用时覆盖）
 
     # ===== 工作流配置 =====
     workflow_timeout=300.0,         # 工作流超时（秒）
@@ -391,6 +418,7 @@ client = (
     ADKClientBuilder()
     .with_llm(provider="openai", model="gpt-4", api_key="sk-xxx")
     .with_memory(api_key="timem-xxx")
+    .with_rag(enabled=True, api_key="timem-xxx", base_url="https://api.timem.cloud", kb_id="kb_xxx")
     .with_http(timeout=30.0, max_retries=5)
     .with_debug(enabled=True)
     .build()
@@ -404,6 +432,17 @@ client = create_client(
 )
 ```
 
+**Builder 方法速查：**
+
+| 方法 | 说明 |
+|------|------|
+| `.with_llm(provider, model, api_key, base_url, ...)` | 配置 LLM |
+| `.with_memory(api_key, base_url, enabled)` | 配置记忆服务 |
+| `.with_rag(enabled, api_key, base_url, kb_id)` | 配置 TimeM RAG 云服务（**kb_id 为默认知识库 ID**） |
+| `.with_http(timeout, max_retries, verify_ssl)` | 配置 HTTP 客户端 |
+| `.with_debug(enabled)` | 开启/关闭调试模式 |
+| `.build()` | 构建 ADKClient 实例 |
+
 ### 5.2 可用方法
 
 ```python
@@ -414,7 +453,10 @@ agent = client.create_chat_agent("my_agent")
 response = agent.chat("你好")
 print(response)  # AI 回复文本
 
-# 对话 + RAG
+# 对话 + RAG（传入 kb_id）
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto", kb_id="kb_xxx")
+
+# 对话 + RAG（使用 Builder 中设置的默认 kb_id）
 response = agent.chat("你们的最小起订量是多少？", rag_used="auto")
 
 # 通过 ChatFlow 对话（更底层的控制）
@@ -507,16 +549,22 @@ agent = ChatAgent(
 response = agent.chat("你好")
 print(response)  # AI 回复文本
 
+# 带 RAG 的对话
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto", kb_id="kb_xxx")
+
 # 方式2：通过 ADKClient 创建
 from aigility import ADKClientBuilder
 
 client = (
     ADKClientBuilder()
     .with_llm(provider="deepseek", model="deepseek-chat", api_key="sk-xxx")
+    .with_rag(enabled=True, api_key="timem-xxx", base_url="https://api.timem.cloud", kb_id="kb_xxx")
     .build()
 )
 agent = client.create_chat_agent("my_agent")
-response = agent.chat("你好", rag_used="auto")
+
+# kb_id 可省，使用 Builder 中设置的默认值
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto")
 ```
 
 **构造参数：**
@@ -531,8 +579,8 @@ response = agent.chat("你好", rag_used="auto")
 
 | 方法 | 类型 | 返回值 | 说明 |
 |------|------|--------|------|
-| `chat(user_input, rag_used)` | 同步 | `str` | 便捷对话，返回 AI 回复文本 |
-| `invoke(state)` | 异步 | `AgentResponse` | 实现 BaseAgent 接口，接受 State 对象 |
+| `chat(user_input, rag_used, kb_id)` | 同步 | `str` | 便捷对话，返回 AI 回复文本。**RAG 模式下 kb_id 必传**（除非已在 Builder/ADKConfig 中设置默认值）。`rag_used="off"` 时 kb_id 可选 |
+| `invoke(state)` | 异步 | `AgentResponse` | 实现 BaseAgent 接口，接受 State 对象。**RAG 模式下需通过 `state.metadata["kb_id"]` 传入知识库 ID** |
 
 ### 6.3 数据模型
 
@@ -562,9 +610,16 @@ class ChatResponse(BaseModel):
 
 | 模式 | 行为 | 适用场景 |
 |------|------|---------|
-| `"auto"` | LLM 自主决定是否调用 RAG 工具 | 通用场景，LLM 会根据问题判断是否需要检索 |
-| `"on"` | 强制调用 RAG，跳过决策节点 | 确定需要检索的场景 |
-| `"off"` | 强制关闭 RAG，纯对话模式 | 闲聊、创意写作等不需要知识库的场景 |
+| `"auto"` | LLM 自主决定是否调用 RAG 工具 | 通用场景，LLM 会根据问题判断是否需要检索 | **必传** |
+| `"on"` | 强制调用 RAG，跳过决策节点 | 确定需要检索的场景 | **必传** |
+| `"off"` | 强制关闭 RAG，纯对话模式 | 闲聊、创意写作等不需要知识库的场景 | 可选 |
+
+> **⚠️ 重要：** 当 `rag_used` 为 `"auto"` 或 `"on"` 时，`kb_id` 为**必传参数**。可通过以下任一方式提供：
+> 1. `chat(kb_id="kb_xxx")` — 调用时传入
+> 2. `ADKClientBuilder.with_rag(kb_id="kb_xxx")` — Builder 中设置默认值
+> 3. `ADKConfig(timem_kb_id="kb_xxx")` — 配置中设置默认值
+>
+> 如果未提供 `kb_id`，SDK 将抛出 `ValueError`。
 
 ---
 
@@ -687,7 +742,29 @@ flow = ChatFlow(adk_config=config, flow_config={
 
 ### 7.5 kb_id 传递机制
 
-知识库 ID 通过 LangGraph 的 `RunnableConfig` 传递：
+知识库 ID 通过 LangGraph 的 `RunnableConfig` 传递，SDK 在不同层级提供了多种传入方式：
+
+**方式1：通过 ChatAgent.chat() 直接传入（推荐）**
+
+```python
+agent = client.create_chat_agent("my_agent")
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto", kb_id="kb_xxx")
+```
+
+**方式2：通过 ADKClientBuilder.with_rag() 设置默认值**
+
+```python
+client = (
+    ADKClientBuilder()
+    .with_llm(...)
+    .with_rag(enabled=True, api_key="...", base_url="...", kb_id="kb_xxx")
+    .build()
+)
+agent = client.create_chat_agent("my_agent")
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto")  # 使用默认 kb_id
+```
+
+**方式3：通过 ChatFlow + RunnableConfig 直接传入（底层方式）**
 
 ```python
 from langchain_core.runnables import RunnableConfig
@@ -695,6 +772,15 @@ from langchain_core.runnables import RunnableConfig
 config = RunnableConfig(configurable={"timem_kb_id": "kb_xxx"})
 result = flow.invoke(user_input="...", config=config, rag_used="on")
 ```
+
+**方式4：通过 ChatRequest.kb_id（ChatService 方式）**
+
+```python
+request = ChatRequest(user_input="...", kb_id="kb_xxx", rag_used="auto")
+response = service.process_chat(request)
+```
+
+**优先级：** `chat()` 参数 `kb_id` > `ADKConfig.timem_kb_id` > `None`
 
 ---
 
@@ -1181,6 +1267,7 @@ asyncio.run(main())
 ```python
 from aigility import ADKClientBuilder
 
+# 带 RAG 的完整配置
 client = (
     ADKClientBuilder()
     .with_llm(
@@ -1188,6 +1275,12 @@ client = (
         model="deepseek-chat",
         api_key="sk-xxx",
         base_url="https://api.deepseek.com",
+    )
+    .with_rag(
+        enabled=True,
+        api_key="timem-xxx",
+        base_url="https://api.timem.cloud",
+        kb_id="kb_my_store",       # 默认知识库 ID
     )
     .build()
 )
@@ -1198,8 +1291,12 @@ agent = client.create_chat_agent("my_agent")
 response = agent.chat("你好", rag_used="off")
 print(response)
 
-# 带 RAG 的对话
+# 带 RAG 的对话（使用默认 kb_id）
 response = agent.chat("你们的最小起订量是多少？", rag_used="auto")
+print(response)
+
+# 带 RAG 的对话（覆盖默认 kb_id）
+response = agent.chat("你们的最小起订量是多少？", rag_used="auto", kb_id="kb_another")
 print(response)
 ```
 

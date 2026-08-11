@@ -535,6 +535,17 @@ class ChatFlow:
         # 添加最新的用户消息
         history.append(HumanMessage(content=user_input))
 
+        # 验证 kb_id：RAG 模式下必传
+        target_kb_id = None
+        if config:
+            target_kb_id = config.get("configurable", {}).get("timem_kb_id")
+        if rag_used != "off" and not target_kb_id:
+            raise ValueError(
+                f"rag_used='{rag_used}' 但未提供 kb_id 知识库 ID。"
+                f"请通过 ChatAgent.chat(kb_id='your_kb_id') 传入，"
+                f"或通过 ChatFlow.invoke(config=RunnableConfig(configurable={{'timem_kb_id': 'your_kb_id'}})) 传入。"
+            )
+
         initial_state = ChatFlowState(
             messages=history,
             thought=None,
@@ -624,6 +635,17 @@ class ChatFlow:
 
         # 添加最新的用户消息
         history.append(HumanMessage(content=user_input))
+
+        # 验证 kb_id：RAG 模式下必传
+        target_kb_id = None
+        if config:
+            target_kb_id = config.get("configurable", {}).get("timem_kb_id")
+        if rag_used != "off" and not target_kb_id:
+            raise ValueError(
+                f"rag_used='{rag_used}' 但未提供 kb_id 知识库 ID。"
+                f"请通过 ChatAgent.chat(kb_id='your_kb_id') 传入，"
+                f"或通过 ChatFlow.astream(config=RunnableConfig(configurable={{'timem_kb_id': 'your_kb_id'}})) 传入。"
+            )
 
         initial_state = ChatFlowState(
             messages=history,
