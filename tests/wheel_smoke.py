@@ -90,7 +90,7 @@ EXPECTED_OPTIONAL_REQUIREMENTS = {
     "rank-bm25": "rag",
     "scikit-learn": "nlp",
     "sentence-transformers": "embedding-huggingface",
-    "timem-ai": ("timem", ">=0.1.6"),
+    "timem-ai": ("timem", ">=0.4.0"),
 }
 EXPECTED_ALL_EXTRA_REFERENCES = {
     "anthropic",

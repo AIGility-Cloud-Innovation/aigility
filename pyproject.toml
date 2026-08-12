@@ -118,7 +118,7 @@ nlp = [
 # ============================================================
 # TiMEM Memory Provider SDK
 timem = [
-    "timem-ai>=0.1.6",
+    "timem-ai>=0.4.0,<0.5",
 ]
 # 太忆 RAG 完整功能 (太忆 + 文档处理)
 timem-rag = [
@@ -226,6 +226,16 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: tests that require a running external service",
+    "optional_timem: tests that require the timem optional dependency",
+    "optional_dashscope: tests that require a DashScope optional dependency",
+    "optional_doc_pdf: tests that require the doc-pdf optional dependency",
+    "optional_doc_word: tests that require the doc-word optional dependency",
+    "optional_doc_excel: tests that require the doc-excel optional dependency",
+    "optional_doc_markdown: tests that require the doc-markdown optional dependency",
+    "optional_rag: tests that require the rag optional dependency",
+]
 addopts = [
     "--strict-markers",
     "--strict-config",
@@ -236,13 +246,3 @@ addopts = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-markers = [
-    "integration: tests that require external services",
-    "optional_timem: tests that require the timem optional dependency",
-    "optional_dashscope: tests that require a DashScope optional dependency",
-    "optional_doc_pdf: tests that require the doc-pdf optional dependency",
-    "optional_doc_word: tests that require the doc-word optional dependency",
-    "optional_doc_excel: tests that require the doc-excel optional dependency",
-    "optional_doc_markdown: tests that require the doc-markdown optional dependency",
-    "optional_rag: tests that require the rag optional dependency",
-]

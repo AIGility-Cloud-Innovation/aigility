@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """真实 RAG 调用测试 — 使用 .env 中的 DeepSeek + 指定的 TimeM 凭据"""
-import sys, os
+import os
+import sys
+
+import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 from aigility import ADKClientBuilder
 
-TIMEM_API_KEY = "sk-BHKld5XZ30MafXl7JkONYX28jvPsnjOfbVM2MjMT"
-TIMEM_KB_ID = "kb_57220503e2eb"
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+TIMEM_API_KEY = os.getenv("TIMEM_API_KEY")
+TIMEM_KB_ID = os.getenv("TIMEM_KB_ID")
 QUERY = "箱包品类"
+
+if not all((DEEPSEEK_API_KEY, TIMEM_API_KEY, TIMEM_KB_ID)):
+    pytest.skip(
+        "缺少 DEEPSEEK_API_KEY、TIMEM_API_KEY 或 TIMEM_KB_ID，跳过真实 RAG 调用测试",
+        allow_module_level=True,
+    )
 
 client = (
     ADKClientBuilder()
     .with_llm(
         provider="deepseek",
         model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_key=DEEPSEEK_API_KEY,
         base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
     )
     .with_rag(
@@ -58,7 +68,7 @@ try:
         .with_llm(
             provider="deepseek",
             model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            api_key=DEEPSEEK_API_KEY,
             base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         )
         .with_rag(enabled=True, api_key=TIMEM_API_KEY, base_url="https://api.timem.cloud")

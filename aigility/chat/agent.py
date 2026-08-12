@@ -5,7 +5,6 @@ Chat Agent
 """
 
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
-from typing import Optional, List, Dict, Any
 from langchain_core.runnables import RunnableConfig
 from ..core.base import BaseAgent
 from ..core.types import State, Message, AgentResponse, MessageRole
@@ -176,4 +175,3 @@ def create_chat_agent(
 ) -> ChatAgent:
     """创建对话智能体"""
     return ChatAgent(name=name, config=config, adk_config=adk_config, **kwargs)
-

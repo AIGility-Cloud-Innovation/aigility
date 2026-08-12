@@ -1,8 +1,8 @@
 """
 ADK Memory - 记忆管理模块
 
-提供记忆的添加、搜索、管理等功能。
-基于 Provider 架构实现。
+提供记忆写入、检索和 Provider 管理功能。
+核心 contracts 与具体 Provider 实现分离，便于接入其他记忆服务。
 
 使用示例:
     from aigility.memory import Memory, MemoryConfig, MemoryProviderConfig
@@ -25,6 +25,19 @@ from typing import TYPE_CHECKING
 
 from .memory import Memory
 from .config import MemoryConfig, MemoryProviderConfig
+from .contracts import (
+    ConversationScope,
+    MemoryCapabilities,
+    MemoryError,
+    MemoryIdentity,
+    MemoryProviderError,
+    MemoryRecord,
+    MemorySearchRequest,
+    MemorySearchResult,
+    MemoryStatus,
+    MemoryWriteRequest,
+    MemoryWriteResult,
+)
 from .providers.base import BaseMemoryProvider
 from .providers.factory import MemoryProviderFactory
 
@@ -45,9 +58,20 @@ def __dir__():
 
 __all__ = [
     "Memory",
+    "MemoryCapabilities",
     "MemoryConfig",
+    "MemoryError",
+    "MemoryIdentity",
+    "MemoryProviderError",
     "MemoryProviderConfig",
     "TimemMemoryProvider",
     "BaseMemoryProvider",
     "MemoryProviderFactory",
+    "MemoryRecord",
+    "MemorySearchRequest",
+    "MemorySearchResult",
+    "MemoryStatus",
+    "MemoryWriteRequest",
+    "MemoryWriteResult",
+    "ConversationScope",
 ]
