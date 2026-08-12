@@ -65,6 +65,34 @@ def test_chat_reuses_session_only_for_its_owner():
     assert len(service.chat_flow.invoke_calls) == 1
 
 
+def test_chat_response_exposes_provider_output_token_usage():
+    service = make_chat_service()
+    service.chat_flow.invoke = lambda **kwargs: {
+        "response": "reply",
+        "thought_process": None,
+        "tool_results": [],
+        "usage_metadata": {"output_tokens": 731},
+    }
+
+    response = service.process_chat(ChatRequest(user_input="hello"))
+
+    assert response.usage_metadata == {"output_tokens": 731}
+
+
+def test_chat_response_exposes_generation_failure_status():
+    service = make_chat_service()
+    service.chat_flow.invoke = lambda **kwargs: {
+        "response": "抱歉，生成回复时发生错误: provider 500",
+        "thought_process": None,
+        "tool_results": [],
+        "generation_succeeded": False,
+    }
+
+    response = service.process_chat(ChatRequest(user_input="hello"))
+
+    assert response.generation_succeeded is False
+
+
 @pytest.mark.asyncio
 async def test_stream_emits_the_canonical_session_before_content_events():
     service = make_chat_service()
