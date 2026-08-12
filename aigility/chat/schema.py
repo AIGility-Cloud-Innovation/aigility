@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 
 class ChatRequest(BaseModel):
     """用户发送的聊天请求模型"""
@@ -30,3 +30,11 @@ class ChatResponse(BaseModel):
     thought_process: Optional[str] = Field(None, description="Agent的思维链(CoT)过程，用于调试和监控")
     reasoning_content: Optional[str] = Field(None, description="推理模型(reasoning模式)生成的原生思维链内容")
     tool_results: Optional[List[dict]] = Field(None, description="工具调用结果列表，用于调试和监控")
+    # 供应商返回的 token 使用量。它是计费审计数据，不向最终用户展示正文以外的内容。
+    usage_metadata: Optional[Dict[str, Any]] = Field(None, description="模型用量元数据，包含 output_tokens 等")
+    # ``False`` 明确表示模型生成失败、response 仅为可展示的友好错误文本；
+    # ``None`` 保留给旧版/第三方 ChatFlow，避免新增字段破坏既有调用方。
+    generation_succeeded: Optional[bool] = Field(
+        None,
+        description="模型正文是否成功生成；失败时调用方不得将 response 作为可计费输出",
+    )

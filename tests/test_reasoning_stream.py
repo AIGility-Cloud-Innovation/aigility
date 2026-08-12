@@ -32,6 +32,7 @@ class FakeReasoningChatModel(BaseChatModel):
     reasoning: str = ""
     content: str = ""
     chunk_size: int = 4
+    usage_metadata: Optional[dict[str, int]] = None
 
     @property
     def _llm_type(self) -> str:
@@ -44,7 +45,7 @@ class FakeReasoningChatModel(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
-        message = AIMessage(content=self.content)
+        message = AIMessage(content=self.content, usage_metadata=self.usage_metadata)
         if self.reasoning:
             message.additional_kwargs["reasoning_content"] = self.reasoning
         return ChatResult(generations=[ChatGeneration(message=message)])
@@ -149,6 +150,7 @@ class TestChatFlowInvoke:
         assert result["response"] == fake_llm.content
         assert result["reasoning_content"] == fake_llm.reasoning
         assert result["thought_process"] == "RAG模式已关闭，不调用任何工具"
+        assert result["generation_succeeded"] is True
 
     def test_invoke_without_reasoning_returns_none(self, off_config):
         plain_llm = FakeReasoningChatModel(reasoning="", content="普通回答")
@@ -158,6 +160,17 @@ class TestChatFlowInvoke:
 
         assert result["response"] == "普通回答"
         assert result["reasoning_content"] is None
+
+    def test_invoke_preserves_provider_output_token_usage(self, off_config):
+        tracked_llm = FakeReasoningChatModel(
+            content="带用量的回答",
+            usage_metadata={"input_tokens": 17, "output_tokens": 731, "total_tokens": 748},
+        )
+        with mock.patch.object(ModelFactory, "create_llm", return_value=tracked_llm):
+            flow = ChatFlow(adk_config=off_config)
+            result = flow.invoke(user_input="你好", rag_used="off")
+
+        assert result["usage_metadata"] == tracked_llm.usage_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +327,4 @@ class TestReasoningMismatchFriendlyError:
         # 错配场景下，返回给用户的错误信息应包含排障提示
         assert "抱歉，生成回复时发生错误" in result["response"]
         assert "llm_reasoning" in result["response"]
+        assert result["generation_succeeded"] is False

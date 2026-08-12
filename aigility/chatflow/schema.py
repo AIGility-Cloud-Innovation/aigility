@@ -46,6 +46,10 @@ class ChatFlowState(TypedDict):
     # RAG 使用模式: "auto", "on", "off"
     rag_used: Optional[str]
 
+    # 最终模型生成是否成功。失败时 messages 仍携带用户可展示的友好错误文本，
+    # 因此跨服务调用方不能仅凭正文非空判断为成功或可计费。
+    generation_succeeded: Optional[bool]
+
 # --- 3. 核心工具定义（模拟） ---
 # 实际应用中，这些会是真实的 RAG 和 Web Search 函数
 class TimeMRAGTool(BaseModel):
