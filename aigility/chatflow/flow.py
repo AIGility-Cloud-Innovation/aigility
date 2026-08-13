@@ -487,7 +487,10 @@ class ChatFlow:
         prompt_input = state.get("prompt_input")
         
         if not chain or not prompt_input:
-            return {"messages": [AIMessage(content="无法生成回复")]}
+            return {
+                "messages": [AIMessage(content="无法生成回复")],
+                "generation_succeeded": False,
+            }
         
         # 同步调用 LLM(chain 直接返回 AIMessage, 正文与思维链在此拆分)
         try:
@@ -500,16 +503,26 @@ class ChatFlow:
             print(f"⏱️ [ADK性能] Stream Response 节点总耗时: {node_elapsed:.2f}s")
 
             reasoning, content = _extract_stream_parts(response)
-            message = AIMessage(content=content)
+            # 结算端需要供应商真实的输出 token；创建新 AIMessage 时必须保留
+            # LangChain 返回的 usage_metadata / response_metadata，不能只复制正文。
+            message = AIMessage(
+                content=content,
+                additional_kwargs=dict(getattr(response, "additional_kwargs", None) or {}),
+                response_metadata=dict(getattr(response, "response_metadata", None) or {}),
+                usage_metadata=getattr(response, "usage_metadata", None),
+            )
             if reasoning:
                 message.additional_kwargs["reasoning_content"] = reasoning
-            return {"messages": [message]}
+            return {"messages": [message], "generation_succeeded": True}
         except Exception as e:
             node_elapsed = (time.perf_counter() - node_start) * 1
             print(f"⏱️ [ADK性能] Stream Response 节点耗时(失败): {node_elapsed:.2f}s")
             explained = _explain_llm_error(e)
             print(f"Response generation failed: {explained}")
-            return {"messages": [AIMessage(content=f"抱歉，生成回复时发生错误: {explained}")]}
+            return {
+                "messages": [AIMessage(content=f"抱歉，生成回复时发生错误: {explained}")],
+                "generation_succeeded": False,
+            }
 
     def invoke(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None, rag_used: str = "auto") -> Dict[str, Any]:
         """
@@ -553,7 +566,8 @@ class ChatFlow:
             tool_results=[],
             reply_suggestion=None,
             session_title_suggestion=None,
-            rag_used=rag_used
+            rag_used=rag_used,
+            generation_succeeded=None,
         )
 
         # 添加调试信息
@@ -592,6 +606,12 @@ class ChatFlow:
         if hasattr(final_message_obj, "additional_kwargs"):
             reasoning_content = final_message_obj.additional_kwargs.get("reasoning_content")
 
+        # 将最终模型消息的真实用量继续透传给 ChatService；只有 provider 未返回
+        # usage 时才允许上层采用明确标注的估算回退。
+        usage_metadata = getattr(final_message_obj, "usage_metadata", None)
+        if not usage_metadata:
+            usage_metadata = getattr(final_message_obj, "response_metadata", {}).get("usage")
+
         invoke_elapsed = (time.perf_counter() - invoke_start) * 1
         print(f"\n{'='*60}")
         print(f"⏱️ [ADK性能] ChatFlow.invoke 总耗时: {invoke_elapsed:.2f}s")
@@ -602,7 +622,9 @@ class ChatFlow:
             "reasoning_content": reasoning_content,
             "thought_process": final_state.get("thought"),
             "tool_results": final_state.get("tool_results"),
-            "full_history": final_state["messages"]
+            "full_history": final_state["messages"],
+            "usage_metadata": usage_metadata,
+            "generation_succeeded": final_state.get("generation_succeeded"),
         }
 
     async def astream(self, user_input: str, history: List[AnyMessage] = None, config: RunnableConfig = None, rag_used: str = "auto"):
@@ -654,7 +676,8 @@ class ChatFlow:
             tool_results=[],
             reply_suggestion=None,
             session_title_suggestion=None,
-            rag_used=rag_used
+            rag_used=rag_used,
+            generation_succeeded=None,
         )
 
         # 添加调试信息

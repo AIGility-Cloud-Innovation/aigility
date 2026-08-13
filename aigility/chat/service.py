@@ -155,7 +155,9 @@ class ChatService:
             reply_suggestions=reply_suggestions,
             thought_process=flow_result.get("thought_process"),
             reasoning_content=flow_result.get("reasoning_content"),
-            tool_results=tool_results_list
+            tool_results=tool_results_list,
+            usage_metadata=flow_result.get("usage_metadata"),
+            generation_succeeded=flow_result.get("generation_succeeded"),
         )
         if context is not None:
             self.session_service.touch(session.session_id)
