@@ -1,0 +1,20 @@
+import { useEffect } from "react";
+import { Routes, Route } from "react-router-dom";
+import { Layout } from "@/components/Layout";
+import HomePage from "@/pages/HomePage/HomePage";
+import NotFoundPage from "@/pages/NotFoundPage/NotFoundPage";
+
+export default function App() {
+  useEffect(() => {
+    document.title = "Aigility SDK 文档";
+  }, []);
+
+  return (
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<HomePage />} />
+      </Route>
+      <Route path="*" element={<NotFoundPage />} />
+    </Routes>
+  );
+}
