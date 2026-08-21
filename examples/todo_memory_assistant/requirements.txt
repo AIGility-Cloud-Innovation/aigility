@@ -1,0 +1,13 @@
+# todo_memory_assistant 回环运行依赖
+# 核心 aigility 已在仓库根依赖中，这里补充回环专用依赖
+
+# MySQL 召回
+sqlalchemy>=2.0
+pymysql>=1.1
+
+# timem 记忆 provider（aigility 的可选依赖，需显式安装才能启用记忆）
+timem-ai>=0.4.0,<0.5
+
+# FastAPI 服务（可选，仅 server.py 需要）
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0

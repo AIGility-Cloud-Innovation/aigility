@@ -28,6 +28,8 @@ from typing import List, Dict, Any, Optional
 
 # 让 examples/ 直接运行也能 import aigility
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../")))
+# 让本目录下的子模块（todo_retriever / feedback_loop）可导入
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from aigility import create_client
 from aigility.memory.contracts import (
@@ -37,6 +39,11 @@ from aigility.memory.contracts import (
     MemorySearchRequest,
 )
 
+# 真实数据来源：MySQL 召回今日 todo；反馈闭环
+from todo_retriever import retrieve_today_todos_as_text
+from feedback_loop import write_feedback, collect_feedback_via_input
+from constants import USER_ID, AGENT_ID, SESSION_ID  # 共享身份常量（单一来源）
+
 
 # ============================== 配置 ==============================
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
@@ -45,11 +52,6 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/"
 
 TIMEM_API_KEY = os.getenv("TIMEM_API_KEY", "")
 TIMEM_BASE_URL = os.getenv("TIMEM_BASE_URL", "")
-
-# 记忆身份（一个固定 user + agent，真实场景按登录用户区分）
-USER_ID = os.getenv("TODO_USER_ID", "demo-user-001")
-AGENT_ID = "todo_memory_assistant"
-SESSION_ID = os.getenv("TODO_SESSION_ID", "session-2026-08-22")
 
 
 # ============================== 客户端 ==============================
@@ -124,7 +126,9 @@ def build_daily_report_prompt(today_text: str, memory_context: str) -> str:
             "\n【历史记忆（来自太忆长期记忆，请承接昨日计划，"
             "检查是否已完成/仍在推进）】\n"
             f"{memory_context}\n"
-            "请在日报中体现对昨日计划的承接与回顾。\n"
+            "要求：请在日报中**显式引用**上述历史记忆的要点（例如"
+            "「根据昨日计划/用户反馈，X 已完成 / Y 仍在推进」），"
+            "体现对昨日计划的承接与回顾，不要泛泛而谈。\n"
         )
     else:
         base += "\n（本次未引入历史记忆，作为无记忆基线对照。）\n"
@@ -146,50 +150,60 @@ async def main():
     client = build_client()
     agent = client.create_chat_agent(AGENT_ID)
 
-    # ---------- 第 1 步：今日 todo 对话 ----------
-    print("[1] 今日 todo 对话（写入记忆 + 对话）")
-    todo_inputs = [
-        "今天我部署了服务到 Kali 服务器 111.113.25.190:40041，并写了 README 初稿。",
-        "还修了一个登录接口的 422 报错，原因是 Pydantic 类型没在运行时导入。",
-    ]
-    today_summary_parts: List[str] = []
-    for text in todo_inputs:
-        reply = agent.chat(text, rag_used="off")
-        today_summary_parts.append(f"用户：{text}\n助手：{reply}")
-        print(f"  用户：{text}")
-        print(f"  助手：{reply[:120]}{'…' if len(reply) > 120 else ''}")
-        # 异步写入记忆（不阻塞对话展示）
-        await save_todo_turn(client, text, reply)
+    # ---------- 第 1 步：真实 MySQL 召回今日 todo ----------
+    print("[1] 从 MySQL 召回今日 todo（真实 SQL 召回）")
+    try:
+        today_text = retrieve_today_todos_as_text()
+        print(today_text)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ✗ MySQL 召回失败：{exc}")
+        print("    请确认 DATABASE_URL 指向的 MySQL 可达且存在 todos/subtasks 表。")
+        today_text = "（无法从 MySQL 召回今日 todo）"
+    today_summary_parts: List[str] = [today_text]
     print()
 
-    # ---------- 第 2 步：无记忆基线日报 ----------
-    print("[2] 生成「无记忆基线」日报")
-    baseline_prompt = build_daily_report_prompt(
-        today_text="\n".join(today_summary_parts), memory_context=""
-    )
-    baseline_report = agent.chat(baseline_prompt, rag_used="off")
-    print(baseline_report)
+    # ---------- 第 2 步：今日 todo 对话（写入记忆） ----------
+    print("[2] 基于今日 todo 做一轮自然语言对话（写入记忆）")
+    print("    可直接回车跳过；或输入一句话（如「把第1条标为已完成」）。")
+    user_says = collect_feedback_via_input("  对话输入：")
+    if user_says:
+        reply = agent.chat(user_says, rag_used="off")
+        today_summary_parts.append(f"用户：{user_says}\n助手：{reply}")
+        print(f"  助手：{reply[:160]}{'…' if len(reply) > 160 else ''}")
+        await save_todo_turn(client, user_says, reply)
+    else:
+        print("  （跳过对话）")
     print()
 
-    # ---------- 第 3 步：记忆增强日报 ----------
-    print("[3] 生成「记忆增强」日报（先 retrieve 历史记忆）")
+    # ---------- 第 3 步：记忆增强日报（先 retrieve 历史记忆） ----------
+    print("[3] 生成「记忆增强」日报（先检索 timem 历史记忆注入 prompt）")
     memory_ctx = await recall_todo_memory(
-        client, query="昨日计划与 todo 进展：Kali 部署、README、登录 422 修复"
+        client, query="昨日计划与 todo 进展，以及用户对日报的反馈"
     )
-    enhanced_prompt = build_daily_report_prompt(
+    report_prompt = build_daily_report_prompt(
         today_text="\n".join(today_summary_parts), memory_context=memory_ctx
     )
-    enhanced_report = agent.chat(enhanced_prompt, rag_used="off")
-    print(enhanced_report)
+    report = agent.chat(report_prompt, rag_used="off")
+    print(report)
     print()
 
-    # ---------- 第 4 步：对比观察 ----------
-    print("[4] 前后对比小结")
-    if memory_ctx:
-        print("  ✓ 已注入历史记忆，增强版日报应体现对昨日计划的承接。")
+    # ---------- 第 4 步：用户反馈优化（写入 timem） ----------
+    print("[4] 收集你对日报的反馈，写入 timem 长期记忆（形成优化闭环）")
+    fb = collect_feedback_via_input("  反馈（如：日报要把优先级标红）：")
+    if fb:
+        await write_feedback(client, fb, report_date=__import__("datetime").date.today().isoformat())
+        print("  ✓ 反馈已写入，下次日报的检索会命中并优化输出。")
     else:
-        print("  · 未配置 TIMEM_API_KEY，两步日报同为无记忆基线（用于演示结构）。")
-        print("    配置 TIMEM_API_KEY 后重跑，即可看到记忆承接差异。")
+        print("  （无反馈，跳过）")
+    print()
+
+    # ---------- 第 5 步：对比观察 ----------
+    print("[5] 回环小结")
+    if memory_ctx:
+        print("  ✓ 已注入历史记忆，日报应体现对昨日计划的承接。")
+    else:
+        print("  · 本次 timem 未检索到历史记忆（首次运行或索引未就绪）。")
+        print("    配置 TIMEM_API_KEY 且运行过一次后，次日日报即可看到记忆承接。")
 
     await client.close()
 
