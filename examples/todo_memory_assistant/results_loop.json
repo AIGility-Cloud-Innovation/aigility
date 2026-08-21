@@ -1,0 +1,815 @@
+{
+  "evalId": "eval-BgT-2026-08-21T23:26:56",
+  "results": {
+    "version": 3,
+    "timestamp": "2026-08-21T23:26:56.149Z",
+    "prompts": [
+      {
+        "id": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "raw": "{{prompt}}",
+        "label": "{{prompt}}",
+        "provider": "todo_memory_assistant回环",
+        "metrics": {
+          "score": 4,
+          "testPassCount": 4,
+          "testFailCount": 0,
+          "testErrorCount": 0,
+          "assertPassCount": 4,
+          "assertFailCount": 0,
+          "totalLatencyMs": 103759,
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 4,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "namedScores": {},
+          "namedScoresCount": {},
+          "namedScoreWeights": {},
+          "cost": 0
+        }
+      }
+    ],
+    "results": [
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const r = output.reply || '';\nreturn r.length > 30 && r.includes('今日') && r.includes('计划');\n"
+              }
+            }
+          ]
+        },
+        "id": "6c463800-5c44-4847-a7ea-da37c7454cf3",
+        "latencyMs": 11777,
+        "namedScores": {},
+        "prompt": {
+          "raw": "",
+          "label": "{{prompt}}",
+          "config": {}
+        },
+        "promptId": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "promptIdx": 0,
+        "provider": {
+          "id": "http://127.0.0.1:8011/chat",
+          "label": "todo_memory_assistant回环"
+        },
+        "response": {
+          "raw": "{\"reply\":\"```markdown\\n# 项目日报\\n\\n## 一、今日完成任务\\n\\n- [ ] 完成A.C.T.O.R.决策架构评审 —— ○未完成\\n  描述：确定性优先+LLM监督写入架构文档\\n- [ ] ClassroomFlow审批流联调 —— ○未完成\\n  描述：client/admin + server端点\\n\\n## 二、遇到的问题\\n\\n- 未能完成A.C.T.O.R.决策架构评审，原因可能包括对架构文档的详细内容和结构理解不够深入，以及LLM监督写入的算法实现存在挑战。\\n- ClassroomFlow审批流联调过程中，遇到了client和server端点通信问题，可能需要进一步检查API接口和数据格式。\\n\\n## 三、明日计划\\n\\n- 完成A.C.T.O.R.决策架构评审，确保架构文档的准确性和完整性。\\n- 解决ClassroomFlow审批流联调中的通信问题，确保client和server端点能够正常交互。\\n- 检查昨日计划中的其他任务，确保所有项目进度按计划推进。\\n```\",\"mode\":\"report\",\"memory_used\":true}",
+          "latencyMs": 11777,
+          "cached": false,
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "content-length": "980",
+                "content-type": "application/json",
+                "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+                "server": "uvicorn"
+              }
+            }
+          },
+          "output": {
+            "reply": "```markdown\n# 项目日报\n\n## 一、今日完成任务\n\n- [ ] 完成A.C.T.O.R.决策架构评审 —— ○未完成\n  描述：确定性优先+LLM监督写入架构文档\n- [ ] ClassroomFlow审批流联调 —— ○未完成\n  描述：client/admin + server端点\n\n## 二、遇到的问题\n\n- 未能完成A.C.T.O.R.决策架构评审，原因可能包括对架构文档的详细内容和结构理解不够深入，以及LLM监督写入的算法实现存在挑战。\n- ClassroomFlow审批流联调过程中，遇到了client和server端点通信问题，可能需要进一步检查API接口和数据格式。\n\n## 三、明日计划\n\n- 完成A.C.T.O.R.决策架构评审，确保架构文档的准确性和完整性。\n- 解决ClassroomFlow审批流联调中的通信问题，确保client和server端点能够正常交互。\n- 检查昨日计划中的其他任务，确保所有项目进度按计划推进。\n```",
+            "mode": "report",
+            "memory_used": true
+          },
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "R1 生成日报（report 模式，由 MySQL 召回驱动，结构完整）",
+          "vars": {
+            "mode": "report",
+            "question": "生成今日日报"
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "const r = output.reply || '';\nreturn r.length > 30 && r.includes('今日') && r.includes('计划');\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 0,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "mode": "report",
+          "question": "生成今日日报"
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "content-length": "980",
+              "content-type": "application/json",
+              "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+              "server": "uvicorn"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const r = output.reply || '';\nreturn r.length > 30 && (r.includes('昨日') || r.includes('回顾') || r.includes('计划'));\n"
+              }
+            }
+          ]
+        },
+        "id": "da44c623-4ea1-4c44-a238-9b592d060cc0",
+        "latencyMs": 23226,
+        "namedScores": {},
+        "prompt": {
+          "raw": "",
+          "label": "{{prompt}}",
+          "config": {}
+        },
+        "promptId": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "promptIdx": 0,
+        "provider": {
+          "id": "http://127.0.0.1:8011/chat",
+          "label": "todo_memory_assistant回环"
+        },
+        "response": {
+          "raw": "{\"reply\":\"## 项目日报 - 2026年8月22日\\n\\n## 一、今日完成任务\\n- 无\\n\\n## 二、遇到的问题\\n- 完成任务 #6 \\\"A.C.T.O.R. 决策架构评审\\\" 仍然未完成。主要遇到的问题是确定性优先和LLM监督写入架构文档的挑战。\\n- 任务 #7 \\\"ClassroomFlow 审批流联调\\\" 也未完成。目前遇到的主要问题是client/admin和server端点的联调问题。\\n\\n## 三、明日计划\\n- 完成任务 #6 \\\"A.C.T.O.R. 决策架构评审\\\"，重点关注确定性优先和LLM监督写入架构文档的问题。\\n- 完成任务 #7 \\\"ClassroomFlow 审批流联调\\\"，解决client/admin和server端点的联调问题。\\n- 检查并回顾昨日计划，确保所有任务按计划推进。\",\"mode\":\"report\",\"memory_used\":true}",
+          "latencyMs": 23226,
+          "cached": false,
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "content-length": "765",
+                "content-type": "application/json",
+                "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+                "server": "uvicorn"
+              }
+            }
+          },
+          "output": {
+            "reply": "## 项目日报 - 2026年8月22日\n\n## 一、今日完成任务\n- 无\n\n## 二、遇到的问题\n- 完成任务 #6 \"A.C.T.O.R. 决策架构评审\" 仍然未完成。主要遇到的问题是确定性优先和LLM监督写入架构文档的挑战。\n- 任务 #7 \"ClassroomFlow 审批流联调\" 也未完成。目前遇到的主要问题是client/admin和server端点的联调问题。\n\n## 三、明日计划\n- 完成任务 #6 \"A.C.T.O.R. 决策架构评审\"，重点关注确定性优先和LLM监督写入架构文档的问题。\n- 完成任务 #7 \"ClassroomFlow 审批流联调\"，解决client/admin和server端点的联调问题。\n- 检查并回顾昨日计划，确保所有任务按计划推进。",
+            "mode": "report",
+            "memory_used": true
+          },
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "R2 记忆增强日报（timem 有历史记忆时，应承接昨日计划/反馈）",
+          "vars": {
+            "mode": "report",
+            "question": "请根据昨日计划和我的反馈生成今日日报"
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "const r = output.reply || '';\nreturn r.length > 30 && (r.includes('昨日') || r.includes('回顾') || r.includes('计划'));\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 1,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "mode": "report",
+          "question": "请根据昨日计划和我的反馈生成今日日报"
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "content-length": "765",
+              "content-type": "application/json",
+              "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+              "server": "uvicorn"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const r = output.reply || '';\nreturn r.length > 5;\n"
+              }
+            }
+          ]
+        },
+        "id": "bdc24d61-8b62-49bb-ae66-e3a3f7896aad",
+        "latencyMs": 29120,
+        "namedScores": {},
+        "prompt": {
+          "raw": "",
+          "label": "{{prompt}}",
+          "config": {}
+        },
+        "promptId": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "promptIdx": 0,
+        "provider": {
+          "id": "http://127.0.0.1:8011/chat",
+          "label": "todo_memory_assistant回环"
+        },
+        "response": {
+          "raw": "{\"reply\":\"已将第1条todo标记为已完成。\",\"mode\":\"todo\",\"memory_used\":true}",
+          "latencyMs": 29120,
+          "cached": false,
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "content-length": "83",
+                "content-type": "application/json",
+                "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+                "server": "uvicorn"
+              }
+            }
+          },
+          "output": {
+            "reply": "已将第1条todo标记为已完成。",
+            "mode": "todo",
+            "memory_used": true
+          },
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "T1 todo 对话模式（返回非空合理回复）",
+          "vars": {
+            "mode": "todo",
+            "question": "把第1条 todo 标记为已完成"
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "const r = output.reply || '';\nreturn r.length > 5;\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 2,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "mode": "todo",
+          "question": "把第1条 todo 标记为已完成"
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "content-length": "83",
+              "content-type": "application/json",
+              "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+              "server": "uvicorn"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "const r = output.reply || '';\nreturn r.length > 30 && r.includes('计划');\n"
+              }
+            }
+          ]
+        },
+        "id": "2dff93b3-c7ee-4a67-85e1-5cc9117665d9",
+        "latencyMs": 39636,
+        "namedScores": {},
+        "prompt": {
+          "raw": "",
+          "label": "{{prompt}}",
+          "config": {}
+        },
+        "promptId": "effa18501e44aafd9bc42a2f64ffc9b6350f94025520ca2ed382f9bdc4b6e982",
+        "promptIdx": 0,
+        "provider": {
+          "id": "http://127.0.0.1:8011/chat",
+          "label": "todo_memory_assistant回环"
+        },
+        "response": {
+          "raw": "{\"reply\":\"## 项目日报\\n\\n### 一、今日完成任务\\n\\n### 二、遇到的问题\\n\\n### 三、明日计划\\n\\n## 一、今日完成任务\\n\\n- 无任务完成。\\n\\n## 二、遇到的问题\\n\\n- A.C.T.O.R. 决策架构评审（任务编号：#6）尚未完成，主要涉及确定性优先+LLM监督写入架构文档。\\n- ClassroomFlow 审批流联调（任务编号：#7）尚未完成，主要涉及client/admin和server端点。\\n\\n## 三、明日计划\\n\\n- 完成A.C.T.O.R. 决策架构评审，确保确定性优先+LLM监督写入架构文档。\\n- 完成ClassroomFlow 审批流联调，确保client/admin和server端点顺利联调。\\n- 检查并回顾昨日计划，确保项目进度符合预期。\",\"mode\":\"report\",\"memory_used\":true}",
+          "latencyMs": 39636,
+          "cached": false,
+          "metadata": {
+            "http": {
+              "status": 200,
+              "statusText": "OK",
+              "headers": {
+                "content-length": "754",
+                "content-type": "application/json",
+                "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+                "server": "uvicorn"
+              }
+            }
+          },
+          "output": {
+            "reply": "## 项目日报\n\n### 一、今日完成任务\n\n### 二、遇到的问题\n\n### 三、明日计划\n\n## 一、今日完成任务\n\n- 无任务完成。\n\n## 二、遇到的问题\n\n- A.C.T.O.R. 决策架构评审（任务编号：#6）尚未完成，主要涉及确定性优先+LLM监督写入架构文档。\n- ClassroomFlow 审批流联调（任务编号：#7）尚未完成，主要涉及client/admin和server端点。\n\n## 三、明日计划\n\n- 完成A.C.T.O.R. 决策架构评审，确保确定性优先+LLM监督写入架构文档。\n- 完成ClassroomFlow 审批流联调，确保client/admin和server端点顺利联调。\n- 检查并回顾昨日计划，确保项目进度符合预期。",
+            "mode": "report",
+            "memory_used": true
+          },
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 0,
+              "prompt": 0,
+              "completion": 0,
+              "cached": 0,
+              "numRequests": 0,
+              "completionDetails": {
+                "reasoning": 0,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          }
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "F1 反馈后日报（report，应体现反馈承接且非空）",
+          "vars": {
+            "mode": "report",
+            "question": "生成今日日报"
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "const r = output.reply || '';\nreturn r.length > 30 && r.includes('计划');\n"
+            }
+          ],
+          "options": {},
+          "metadata": {}
+        },
+        "testIdx": 3,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "mode": "report",
+          "question": "生成今日日报"
+        },
+        "metadata": {
+          "http": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {
+              "content-length": "754",
+              "content-type": "application/json",
+              "date": "Fri, 21 Aug 2026 23:26:56 GMT",
+              "server": "uvicorn"
+            }
+          },
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      }
+    ],
+    "stats": {
+      "successes": 4,
+      "failures": 0,
+      "errors": 0,
+      "tokenUsage": {
+        "prompt": 0,
+        "completion": 0,
+        "cached": 0,
+        "total": 0,
+        "numRequests": 4,
+        "completionDetails": {
+          "reasoning": 0,
+          "acceptedPrediction": 0,
+          "rejectedPrediction": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0
+        },
+        "assertions": {
+          "total": 0,
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "numRequests": 0,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          }
+        }
+      },
+      "durationMs": 39831,
+      "evaluationDurationMs": 39831
+    }
+  },
+  "config": {
+    "tags": {},
+    "description": "todo_memory_assistant 回环真评测（接真实 MySQL 召回 + timem 记忆）",
+    "prompts": [
+      "{{prompt}}"
+    ],
+    "providers": [
+      {
+        "id": "http",
+        "label": "todo_memory_assistant回环",
+        "config": {
+          "method": "POST",
+          "url": "http://127.0.0.1:8011/chat",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": "{\"text\":\"{{question}}\",\"mode\":\"{{mode}}\"}"
+        }
+      }
+    ],
+    "tests": [
+      {
+        "description": "R1 生成日报（report 模式，由 MySQL 召回驱动，结构完整）",
+        "vars": {
+          "mode": "report",
+          "question": "生成今日日报"
+        },
+        "assert": [
+          {
+            "type": "javascript",
+            "value": "const r = output.reply || '';\nreturn r.length > 30 && r.includes('今日') && r.includes('计划');\n"
+          }
+        ]
+      },
+      {
+        "description": "R2 记忆增强日报（timem 有历史记忆时，应承接昨日计划/反馈）",
+        "vars": {
+          "mode": "report",
+          "question": "请根据昨日计划和我的反馈生成今日日报"
+        },
+        "assert": [
+          {
+            "type": "javascript",
+            "value": "const r = output.reply || '';\nreturn r.length > 30 && (r.includes('昨日') || r.includes('回顾') || r.includes('计划'));\n"
+          }
+        ]
+      },
+      {
+        "description": "T1 todo 对话模式（返回非空合理回复）",
+        "vars": {
+          "mode": "todo",
+          "question": "把第1条 todo 标记为已完成"
+        },
+        "assert": [
+          {
+            "type": "javascript",
+            "value": "const r = output.reply || '';\nreturn r.length > 5;\n"
+          }
+        ]
+      },
+      {
+        "description": "F1 反馈后日报（report，应体现反馈承接且非空）",
+        "vars": {
+          "mode": "report",
+          "question": "生成今日日报"
+        },
+        "assert": [
+          {
+            "type": "javascript",
+            "value": "const r = output.reply || '';\nreturn r.length > 30 && r.includes('计划');\n"
+          }
+        ]
+      }
+    ],
+    "env": {},
+    "outputPath": [
+      "examples/todo_memory_assistant/results_loop.json"
+    ],
+    "extensions": [],
+    "metadata": {},
+    "evaluateOptions": {}
+  },
+  "shareableUrl": null,
+  "metadata": {
+    "promptfooVersion": "0.122.0",
+    "nodeVersion": "v22.22.2",
+    "platform": "win32",
+    "arch": "x64",
+    "exportedAt": "2026-08-21T23:27:36.118Z",
+    "evaluationCreatedAt": "2026-08-21T23:26:56.149Z"
+  },
+  "vars": [
+    "mode",
+    "question"
+  ],
+  "runtimeOptions": {
+    "eventSource": "cli",
+    "showProgressBar": true,
+    "repeat": 1,
+    "maxConcurrency": 4,
+    "cache": false
+  }
+}

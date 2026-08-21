@@ -1,0 +1,68 @@
+description: todo_memory_assistant 回环真评测（接真实 MySQL 召回 + timem 记忆）
+
+# provider 指向本地回环 FastAPI 服务 /chat（examples/todo_memory_assistant/server.py）
+# 每个 test 是一次真实 HTTP 调用：服务端从 MySQL 召回今日 todo，
+# 并（若 timem 有历史记忆）检索注入日报。
+#
+# 注意：http provider 的 response body 是完整 JSON 字符串，
+# 下面所有 assert 用 JS 手动 output.reply 提取真实回复再判断，
+# 避免依赖 transform 语法差异。
+#
+# 运行前置：
+#   export LLM_API_KEY="智谱Key"
+#   export TIMEM_API_KEY="太忆Key"            # 可选；有则命中记忆增强
+#   export DATABASE_URL="mysql+pymysql://.../todo_db"
+#   python examples/todo_memory_assistant/server.py   # 监听 8011
+#   promptfoo eval -c examples/todo_memory_assistant/promptfooconf.yaml
+
+providers:
+  - id: http
+    label: todo_memory_assistant回环
+    config:
+      method: "POST"
+      url: "http://127.0.0.1:8011/chat"
+      headers:
+        Content-Type: "application/json"
+      body: |
+        {"text": "{{question}}", "mode": "{{mode}}"}
+
+tests:
+  - description: "R1 生成日报（report 模式，由 MySQL 召回驱动，结构完整）"
+    vars:
+      mode: "report"
+      question: "生成今日日报"
+    assert:
+      - type: javascript
+        value: |
+          const r = output.reply || '';
+          return r.length > 30 && r.includes('今日') && r.includes('计划');
+
+  - description: "R2 记忆增强日报（timem 有历史记忆时，应承接昨日计划/反馈）"
+    vars:
+      mode: "report"
+      question: "请根据昨日计划和我的反馈生成今日日报"
+    assert:
+      - type: javascript
+        value: |
+          const r = output.reply || '';
+          return r.length > 30 && (r.includes('昨日') || r.includes('回顾') || r.includes('计划'));
+
+  - description: "T1 todo 对话模式（返回非空合理回复）"
+    vars:
+      mode: "todo"
+      question: "把第1条 todo 标记为已完成"
+    assert:
+      - type: javascript
+        value: |
+          const r = output.reply || '';
+          return r.length > 5;
+
+  - description: "F1 反馈后日报（report，应体现反馈承接且非空）"
+    vars:
+      mode: "report"
+      question: "生成今日日报"
+    assert:
+      - type: javascript
+        value: |
+          const r = output.reply || '';
+          return r.length > 30 && r.includes('计划');
