@@ -1,62 +1,112 @@
+# -*- coding: utf-8 -*-
 """
-Workflow Engine
+WorkflowEngine — 基于 LangGraph 的工作流引擎。
 
-基于 LangGraph 的工作流引擎。
+WorkflowEngine 封装了 WorkflowBuilder，提供更高级的 invoke/stream 接口。
+它是 aigility 的通用编排工具，不包含任何业务逻辑。
+
+使用方式:
+    engine = WorkflowEngine(
+        config_path="workflow_config.yaml",
+        state_schema=MyState,
+    )
+    engine.register_node("my_node", my_func)
+    graph = engine.build()
+    result = graph.invoke(initial_state)
 """
 
-from typing import Optional, Dict, Any, List
-from ..core.types import State
-from ..core.config import AgentConfig
+import logging
+from typing import Optional, Dict, Any, Type, Callable
+
+from .builder import WorkflowBuilder
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowEngine:
-    """工作流引擎"""
-    
+    """工作流引擎 — 封装 WorkflowBuilder，提供编排能力。"""
+
     def __init__(
         self,
-        name: str,
-        nodes: Optional[Dict[str, Any]] = None,  # LangGraph Nodes
-        graph: Optional[Any] = None,  # LangGraph StateGraph
+        name: str = "workflow",
+        config_path: Optional[str] = None,
+        state_schema: Optional[Type] = None,
+        node_registry: Optional[Dict[str, Callable]] = None,
+        condition_registry: Optional[Dict[str, Callable]] = None,
     ):
         self.name = name
-        self.nodes = nodes or {}
-        self.graph = graph
-        
-        # TODO: 初始化 LangGraph StateGraph
-        # 这里需要使用 LangGraph 的 StateGraph 类
-    
-    async def invoke(self, state: State) -> State:
+        self.builder = WorkflowBuilder(
+            config_path=config_path,
+            state_schema=state_schema,
+            node_registry=node_registry,
+            condition_registry=condition_registry,
+        )
+        self._graph: Optional[Any] = None
+
+    # ── 注册代理 ──────────────────────────────────────────────
+
+    def register_node(self, node_id: str, node_function: Callable) -> None:
+        self.builder.register_node(node_id, node_function)
+
+    def register_nodes(self, nodes: Dict[str, Callable]) -> None:
+        self.builder.register_nodes(nodes)
+
+    def register_condition(self, name: str, func: Callable) -> None:
+        self.builder.register_condition(name, func)
+
+    def register_conditions(self, conditions: Dict[str, Callable]) -> None:
+        self.builder.register_conditions(conditions)
+
+    def set_seam_caller(self, seam_caller: Callable) -> None:
+        """注入 Seam 调用器 (harness 集成用)"""
+        self.builder.set_seam_caller(seam_caller)
+
+    # ── 构建与执行 ──────────────────────────────────────────────
+
+    def build(self, fallback_graph: Optional[Any] = None) -> Any:
+        """构建并编译工作流图"""
+        self._graph = self.builder.build(fallback_graph=fallback_graph)
+        return self._graph
+
+    def invoke(self, state: Any, config: Optional[Dict] = None) -> Any:
         """
-        执行工作流
-        
+        执行工作流。
+
         Args:
             state: 初始状态
-            
+            config: LangGraph 运行配置 (可选)
+
         Returns:
             最终状态
         """
-        # TODO: 实现 LangGraph 调用
-        raise NotImplementedError("WorkflowEngine.invoke not yet implemented")
-    
-    async def stream(self, state: State):
-        """
-        流式执行工作流
-        
-        Args:
-            state: 初始状态
-            
-        Yields:
-            状态更新
-        """
-        # TODO: 实现 LangGraph 流式调用
-        raise NotImplementedError("WorkflowEngine.stream not yet implemented")
+        if self._graph is None:
+            self.build()
+        return self._graph.invoke(state, config=config)
+
+    async def ainvoke(self, state: Any, config: Optional[Dict] = None) -> Any:
+        """异步执行工作流"""
+        if self._graph is None:
+            self.build()
+        return await self._graph.ainvoke(state, config=config)
+
+    async def astream(self, state: Any, config: Optional[Dict] = None):
+        """流式执行工作流"""
+        if self._graph is None:
+            self.build()
+        async for chunk in self._graph.astream(state, config=config):
+            yield chunk
 
 
 def create_workflow_engine(
-    name: str,
-    nodes: Optional[Dict[str, Any]] = None,
-    **kwargs
+    name: str = "workflow",
+    config_path: Optional[str] = None,
+    state_schema: Optional[Type] = None,
+    **kwargs,
 ) -> WorkflowEngine:
     """创建工作流引擎"""
-    return WorkflowEngine(name=name, nodes=nodes, **kwargs)
-
+    return WorkflowEngine(
+        name=name,
+        config_path=config_path,
+        state_schema=state_schema,
+        **kwargs,
+    )
