@@ -47,6 +47,8 @@ class WorkflowBuilder:
         state_schema: Optional[Type] = None,
         node_registry: Optional[Dict[str, Callable]] = None,
         condition_registry: Optional[Dict[str, Callable]] = None,
+        node_module: Optional[str] = None,
+        condition_module: Optional[str] = None,
     ):
         self.config_path = config_path
         self.state_schema = state_schema
@@ -54,6 +56,8 @@ class WorkflowBuilder:
         self.raw_config: Dict[str, Any] = {}
         self.node_registry: Dict[str, Callable] = node_registry or {}
         self.condition_registry: Dict[str, Callable] = condition_registry or {}
+        self.node_module: Optional[str] = node_module
+        self.condition_module: Optional[str] = condition_module
 
         if config_path:
             self._load_config()
@@ -142,10 +146,16 @@ class WorkflowBuilder:
 
     def _import_node_function(self, func_name: str) -> Optional[Callable]:
         """
-        从已注册的模块中导入节点函数。
-        子类可重写此方法来指定从哪个模块导入。
-        默认返回 None — 依赖运行时注册或 capability_ref。
+        从 node_module 导入节点函数。
+        node_module 在 __init__ 时设置，指向包含节点函数的 Python 模块。
         """
+        if self.node_module:
+            try:
+                import importlib
+                mod = importlib.import_module(self.node_module)
+                return getattr(mod, func_name, None)
+            except (ImportError, AttributeError):
+                return None
         return None
 
     def _make_capability_wrapper(self, capability_ref: str) -> Callable:
@@ -206,9 +216,15 @@ class WorkflowBuilder:
 
     def _import_condition_function(self, func_name: str) -> Optional[Callable]:
         """
-        从已注册的模块中导入条件函数。
-        子类可重写此方法。默认返回 None。
+        从 condition_module 导入条件函数。
         """
+        if self.condition_module:
+            try:
+                import importlib
+                mod = importlib.import_module(self.condition_module)
+                return getattr(mod, func_name, None)
+            except (ImportError, AttributeError):
+                return None
         return None
 
     # ── 构建图 ────────────────────────────────────────────────

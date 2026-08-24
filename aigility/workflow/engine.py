@@ -33,6 +33,8 @@ class WorkflowEngine:
         state_schema: Optional[Type] = None,
         node_registry: Optional[Dict[str, Callable]] = None,
         condition_registry: Optional[Dict[str, Callable]] = None,
+        node_module: Optional[str] = None,
+        condition_module: Optional[str] = None,
     ):
         self.name = name
         self.builder = WorkflowBuilder(
@@ -40,6 +42,8 @@ class WorkflowEngine:
             state_schema=state_schema,
             node_registry=node_registry,
             condition_registry=condition_registry,
+            node_module=node_module,
+            condition_module=condition_module,
         )
         self._graph: Optional[Any] = None
 
@@ -68,17 +72,25 @@ class WorkflowEngine:
         self._graph = self.builder.build(fallback_graph=fallback_graph)
         return self._graph
 
-    def invoke(self, state: Any, config: Optional[Dict] = None) -> Any:
+    def invoke(self, state: Any, config: Optional[Dict] = None,
+               node_registry: Optional[Dict[str, Callable]] = None,
+               condition_registry: Optional[Dict[str, Callable]] = None) -> Any:
         """
         执行工作流。
 
         Args:
             state: 初始状态
             config: LangGraph 运行配置 (可选)
+            node_registry: 运行时注入节点函数 (可选, 在构建前注册)
+            condition_registry: 运行时注入条件函数 (可选)
 
         Returns:
             最终状态
         """
+        if node_registry:
+            self.builder.register_nodes(node_registry)
+        if condition_registry:
+            self.builder.register_conditions(condition_registry)
         if self._graph is None:
             self.build()
         return self._graph.invoke(state, config=config)
