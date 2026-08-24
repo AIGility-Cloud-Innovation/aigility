@@ -2,7 +2,7 @@
 """
 WorkflowBuilder 测试 — 验证 aigility.workflow 能独立读 YAML 并构建 LangGraph。
 
-不依赖 reachAI 任何代码。
+不依赖任何外部业务代码。
 """
 import sys
 import os

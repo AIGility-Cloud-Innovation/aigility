@@ -2,7 +2,7 @@
 """
 工作流配置 Schema — Pydantic 模型，用于验证 workflow_config.yaml。
 
-从 reachAI 迁入 aigility，去掉销售场景特定字段，保留通用工作流配置模型。
+从 reachAI 实践经验提炼，去掉场景特定字段，保留通用工作流配置模型。
 """
 
 from typing import List, Optional, Dict, Any
