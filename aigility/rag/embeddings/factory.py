@@ -32,7 +32,15 @@ class EmbeddingFactory:
         """
         provider = config.provider
         
-        if provider == "huggingface":
+        if provider == "none":
+            raise ValueError(
+                "[aigility] 未配置 Embedding Provider (provider='none')。"
+                "RAG 功能默认不启用，不会下载任何模型。"
+                "如需 RAG，请在 EmbeddingConfig 中显式配置 provider "
+                "(如 dashscope / openai / zhipuai / huggingface)。"
+            )
+        
+        elif provider == "huggingface":
             from .huggingface import HuggingFaceEmbeddingAdapter
             embedding_model = HuggingFaceEmbeddingAdapter.load(config)
             

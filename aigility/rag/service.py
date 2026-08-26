@@ -73,11 +73,22 @@ class RAGService:
         """
         _load_dotenv_for_rag_service()
         self.config = config or RAGConfig()
+        self._enabled = False  # RAG 是否启用 (provider 未配置时为 False)
 
         logging.info(f"🔧 Initializing RAG with: Embedding={self.config.embedding.provider}, Store={self.config.vector_store.provider}")
 
-        # 1. 初始化 Embedding 模型
-        raw_embedding = EmbeddingFactory.get_embedding_model(self.config.embedding)
+        # 1. 初始化 Embedding 模型 (provider='none' 时 RAG 不启用, 不下载模型)
+        try:
+            raw_embedding = EmbeddingFactory.get_embedding_model(self.config.embedding)
+        except ValueError as e:
+            self._enabled = False
+            self.embedding_model = None
+            self._embedding_wrapper = None
+            self.vector_store = None
+            self.ingestion = None
+            logging.warning(f"⚠️ RAG 未启用: {e}")
+            return
+        self._enabled = True
         self.embedding_model = raw_embedding
         self._embedding_wrapper = EmbeddingWrapper(raw_embedding)
 
@@ -515,6 +526,12 @@ class RAGService:
             >>> print(str(result))  # 格式化字符串（向后兼容）
             >>> print(result.usage.embedding.total_tokens)  # embedding token 消耗
         """
+        if not getattr(self, '_enabled', False):
+            raise RuntimeError(
+                "[aigility] RAG 未启用: 未配置 Embedding Provider (provider='none')。"
+                "请显式配置 provider (dashscope/openai/zhipuai/huggingface) 后使用检索。"
+            )
+
         try:
             # 根据enable_keyword_boost设置BM25权重
             if enable_keyword_boost:
