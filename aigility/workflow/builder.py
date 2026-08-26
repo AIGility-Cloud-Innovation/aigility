@@ -21,6 +21,7 @@ WorkflowBuilder — 从 YAML 配置文件构建 LangGraph 工作流。
 
 import os
 import logging
+import importlib
 import yaml
 from typing import Dict, Any, Optional, Callable, Type
 from langgraph.graph import StateGraph, END
@@ -28,6 +29,30 @@ from langgraph.graph import StateGraph, END
 from .schema import WorkflowConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_dotted_path(path: str) -> Any:
+    """把 'module.sub.attr' 字符串解析为 Python 对象 (类/函数)。
+
+    兼容点分路径引用风格: 'tests.workflow_state.TestState' → TestState 类。
+    解析失败时原样返回字符串, 不抛异常 (调用方再决定如何处理)。
+    """
+    if not isinstance(path, str) or "." not in path:
+        return path
+    try:
+        parts = path.split(".")
+        for i in range(len(parts), 0, -1):
+            try:
+                mod = importlib.import_module(".".join(parts[:i]))
+                obj = mod
+                for attr in parts[i:]:
+                    obj = getattr(obj, attr)
+                return obj
+            except (ImportError, AttributeError):
+                continue
+        return path
+    except Exception:
+        return path
 
 
 class WorkflowBuilder:
@@ -51,7 +76,12 @@ class WorkflowBuilder:
         condition_module: Optional[str] = None,
     ):
         self.config_path = config_path
-        self.state_schema = state_schema
+        # state_schema 兼容两种传法: Type 类直接使用, 点分路径字符串自动解析为类
+        self.state_schema = (
+            _resolve_dotted_path(state_schema)
+            if isinstance(state_schema, str)
+            else state_schema
+        )
         self.config: Optional[WorkflowConfig] = None
         self.raw_config: Dict[str, Any] = {}
         self.node_registry: Dict[str, Callable] = node_registry or {}
