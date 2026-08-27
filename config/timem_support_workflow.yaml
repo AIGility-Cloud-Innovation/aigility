@@ -1,0 +1,27 @@
+# TiMEM Space 客服工作流 (带只读检索)
+# 角色: @persona/timem-support 委托执行
+# 链路: retrieve(BM25 检索知识库) → ask(llm_node 带检索上下文回答)
+workflow:
+  name: "timem-support-workflow"
+  description: "TiMEM Space 客服: BM25 检索知识库 → llm_node 基于检索结果回答"
+  entry_point: "retrieve"
+
+  nodes:
+    retrieve:
+      type: "function_node"
+      description: "只读检索 TiMEM Space 知识库 (BM25, 不修改任何数据)"
+      function_ref: "retrieve_node"
+      output_keys: ["retrieved_context", "retrieved_count"]
+
+    ask:
+      type: "llm_node"
+      description: "带检索上下文生成回答"
+      prompt_ref: "aigility.timem_support_prompts.TIMEM_SUPPORT_SYSTEM_PROMPT"
+      output_keys: ["result"]
+
+  flow:
+    edges:
+      - from: "retrieve"
+        to: "ask"
+      - from: "ask"
+        to: "__end__"

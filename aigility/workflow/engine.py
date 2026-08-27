@@ -72,14 +72,17 @@ class WorkflowEngine:
         self._graph = self.builder.build(fallback_graph=fallback_graph)
         return self._graph
 
-    def invoke(self, state: Any, config: Optional[Dict] = None,
+    def invoke(self, state: Any = None, config: Optional[Dict] = None,
                node_registry: Optional[Dict[str, Callable]] = None,
-               condition_registry: Optional[Dict[str, Callable]] = None) -> Any:
+               condition_registry: Optional[Dict[str, Callable]] = None,
+               **extra: Any) -> Any:
         """
         执行工作流。
 
         Args:
-            state: 初始状态
+            state: 初始状态 (或直接传状态字段 kwargs —— 桥接调用兼容:
+                   invoke(user_input="...", merchant_id="...") 等价于
+                   invoke({"user_input": "...", "merchant_id": "..."}))
             config: LangGraph 运行配置 (可选)
             node_registry: 运行时注入节点函数 (可选, 合并到 builder 后重新构建)
             condition_registry: 运行时注入条件函数 (可选)
@@ -87,6 +90,15 @@ class WorkflowEngine:
         Returns:
             最终状态
         """
+        # 桥接兼容: 若传入的是散装状态字段 (非 dict 且带了额外 kwargs), 聚合成 state
+        if state is None and extra:
+            state = dict(extra)
+        elif extra and not isinstance(state, dict):
+            state = {"state": state, **extra}
+        elif extra and isinstance(state, dict):
+            state = {**state, **extra}
+        elif state is None:
+            state = {}
         needs_rebuild = False
         if node_registry:
             self.builder.register_nodes(node_registry)

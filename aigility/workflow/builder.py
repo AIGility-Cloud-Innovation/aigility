@@ -144,6 +144,11 @@ class WorkflowBuilder:
           3. capability_ref → 返回 Seam 能力调用 wrapper
           4. 从 nodes 模块动态导入 (fallback)
         """
+        # 0. 按节点类型分发: llm_node → LLM 调用闭包
+        node_cfg = self.raw_config.get("workflow", {}).get("nodes", {}).get(node_id, {})
+        if isinstance(node_cfg, dict) and node_cfg.get("type") == "llm_node":
+            return self._make_llm_node(node_id, node_cfg)
+
         # 1. 运行时注册表
         if node_id in self.node_registry:
             return self.node_registry[node_id]
@@ -161,7 +166,6 @@ class WorkflowBuilder:
                 return node_func
 
         # 3. capability_ref (Seam 能力调用)
-        node_cfg = self.raw_config.get("workflow", {}).get("nodes", {}).get(node_id, {})
         if isinstance(node_cfg, dict) and "capability_ref" in node_cfg:
             cap_ref = node_cfg["capability_ref"]
             return self._make_capability_wrapper(cap_ref)
@@ -187,6 +191,131 @@ class WorkflowBuilder:
             except (ImportError, AttributeError):
                 return None
         return None
+
+    def _make_llm_node(self, node_id: str, node_cfg: Dict[str, Any]) -> Callable:
+        """
+        创建 LLM 节点闭包。
+
+        llm_node 通过 prompt_ref 引用提示词（格式: module.prompt_name 或
+        直接文本），把 state 中的 user_input 传给 LLM，返回生成文本。
+
+        LLM 端点配置 (环境变量):
+          LITELLM_URL / LITELLM_KEY  — 兼容 OpenAI 协议的网关 (LiteLLM)
+          LLM_MODEL                  — 模型名 (默认 deepseek-v4-pro)
+        未配置时降级为确定性回退文本（不崩，便于原型链路验证）。
+        """
+        prompt_ref = node_cfg.get("prompt_ref")
+        output_keys = node_cfg.get("output_keys") or ["result"]
+
+        # 解析提示词: 支持 "module.prompt_name" 引用，或直接文本
+        def _resolve_prompt() -> str:
+            if not prompt_ref:
+                return "你是 aigility 智能助手。"
+            if "." not in prompt_ref:
+                return prompt_ref  # 直接文本
+            try:
+                mod_name, prompt_name = prompt_ref.rsplit(".", 1)
+                mod = importlib.import_module(mod_name)
+                p = getattr(mod, prompt_name)
+                return p if isinstance(p, str) else str(p)
+            except (ImportError, AttributeError):
+                logger.warning(f"prompt_ref '{prompt_ref}' 解析失败，使用默认提示词")
+                return "你是 aigility 智能助手。"
+
+        prompt = _resolve_prompt()
+
+        def llm_node(state: Any) -> Dict[str, Any]:
+            # 提取用户输入
+            user_input = ""
+            context = ""
+            if isinstance(state, dict):
+                user_input = str(state.get("user_input", state.get("input", "")) or "")
+                context = str(state.get("retrieved_context", state.get("context", "")) or "")
+            else:
+                user_input = str(getattr(state, "user_input", "") or "")
+                context = str(getattr(state, "retrieved_context", "") or "")
+            logger.info(f"llm_node[{node_id}] state keys={list(state.keys()) if isinstance(state, dict) else type(state)} user_input='{user_input[:50]}'")
+
+            try:
+                base_url = os.environ.get("LITELLM_URL", "http://127.0.0.1:48724")
+                api_key = os.environ.get("LITELLM_KEY", "sk-1234")
+                model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
+
+                # 用户消息: 附加上下文 (检索片段), LLM 基于真实知识回答
+                user_msg = user_input
+                if context:
+                    user_msg = f"【知识库检索到的相关内容，请基于此回答，若无关联则如实说明】\n{context}\n\n【用户问题】\n{user_input}"
+
+                content = self._call_llm(base_url, api_key, model, prompt, user_msg)
+                logger.info(f"llm_node[{node_id}] model={model} len={len(content)}")
+
+                # 写回输出键
+                if len(output_keys) == 1:
+                    return {output_keys[0]: content}
+                return {**{k: content for k in output_keys}, "user_input": user_input}
+            except Exception as e:
+                logger.error(f"llm_node[{node_id}] LLM 调用失败: {e}")
+                fallback = (
+                    f"（llm_node 降级）无法连接 LLM 服务: {e}\n"
+                    f"收到消息: {user_input}"
+                )
+                if len(output_keys) == 1:
+                    return {output_keys[0]: fallback}
+                return {**{k: fallback for k in output_keys}, "user_input": user_input}
+
+        return llm_node
+
+    def _call_llm(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        user_input: str,
+    ) -> str:
+        """调用 OpenAI 兼容协议 LLM 端点 (LiteLLM 网关)。"""
+        # 优先尝试 litellm 库；不存在则用标准库 urllib 调 OpenAI 兼容 API
+        try:
+            from litellm import completion
+
+            resp = completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_input},
+                ],
+                api_base=base_url,
+                api_key=api_key,
+                temperature=0.7,
+            )
+            return str(resp.choices[0].message.content or "").strip()
+        except ImportError:
+            pass
+
+        # 标准库回退: urllib 调 /v1/chat/completions
+        import json as _json
+        import urllib.request
+
+        body = _json.dumps({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "temperature": 0.7,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/v1/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        return str(data["choices"][0]["message"]["content"] or "").strip()
 
     def _make_capability_wrapper(self, capability_ref: str) -> Callable:
         """
