@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-TiMEM Space 只读检索器 (BM25 keyword retrieval)
+TiMEM Space 只读检索器 (BM25 keyword retrieval) + 用户记忆召回
 
-仅提供检索能力（读文件/索引 → 返回相关片段）。绝不写入、修改、删除任何数据。
-用于 aigility-harness 客服工作流的 retrieve 节点:
-    index_knowledge_base(source_dir, index_path)  # 一次性建索引
+仅提供检索能力（读文件/索引 → 返回相关片段；召回用户历史记忆）。
+绝不写入、修改、删除任何数据（记忆写入由外部独立流程负责）。
+用于 aigility-harness 客服工作流的 retrieve/recall 节点:
+    index_knowledge_base(source_dir, index_path)
     search_docs(query, index_path, top_k)         # 查询
 """
 import os
@@ -186,3 +187,50 @@ def retrieve_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "retrieved_count": len(hits),
         **state,
     }
+
+# ── 用户记忆召回 (只读) ──────────────────────────────────────────
+
+async def recall_node(state: dict) -> dict:
+    """召回用户历史记忆 (timem.cloud 只读检索)。
+
+    state 需包含:
+      - user_input: 用户问题 (作为检索 query)
+      - 可选 user_id / agent_id: 记忆身份 (缺省用 state 值或常量)
+    返回: {"memory_context": "..."} 或空串 (记忆未配置/失败时优雅降级)。
+    """
+    try:
+        from aigility.memory import Memory
+
+        query = str(state.get("user_input") or state.get("query") or "").strip()
+        if not query:
+            return {"memory_context": ""}
+
+        user_id = state.get("user_id") or os.environ.get("TIMEM_CS_USER_ID", "wecom-user")
+        agent_id = state.get("agent_id") or os.environ.get("TIMEM_CS_AGENT_ID", "harness-cs")
+
+        mem = Memory()
+        try:
+            result = await mem.search(
+                query=query,
+                user_id=user_id,
+                agent_id=agent_id,
+                limit=int(os.environ.get("TIMEM_CS_MEMORY_LIMIT", "5")),
+            )
+        finally:
+            await mem.close()
+
+        # 提取记忆内容
+        if not result or not result.get("success"):
+            return {"memory_context": ""}
+        results = result.get("results") or []
+        if not results:
+            return {"memory_context": ""}
+        lines = []
+        for r in results:
+            content = r.get("content") or r.get("memory") or ""
+            if content:
+                lines.append(f"- {content}")
+        return {"memory_context": "\n".join(lines) if lines else ""}
+    except Exception as e:
+        print(f"[recall_node] 记忆召回失败(降级为空): {e}")
+        return {"memory_context": ""}

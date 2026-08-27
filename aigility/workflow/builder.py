@@ -20,6 +20,7 @@ WorkflowBuilder — 从 YAML 配置文件构建 LangGraph 工作流。
 """
 
 import os
+import asyncio
 import logging
 import importlib
 import yaml
@@ -168,7 +169,7 @@ class WorkflowBuilder:
         # 3. capability_ref (Seam 能力调用)
         if isinstance(node_cfg, dict) and "capability_ref" in node_cfg:
             cap_ref = node_cfg["capability_ref"]
-            return self._make_capability_wrapper(cap_ref)
+            return self._make_capability_wrapper(cap_ref, node_cfg)
 
         # 4. 按 node_id 直接查找 (e.g. "my_node" → "my_node_node")
         node_func = self._import_node_function(f"{node_id}_node")
@@ -228,12 +229,18 @@ class WorkflowBuilder:
             # 提取用户输入
             user_input = ""
             context = ""
+            memory_context = ""
+            recent_history = ""
             if isinstance(state, dict):
                 user_input = str(state.get("user_input", state.get("input", "")) or "")
                 context = str(state.get("retrieved_context", state.get("context", "")) or "")
+                memory_context = str(state.get("memory_context", "") or "")
+                recent_history = str(state.get("recent_history", "") or "")
             else:
                 user_input = str(getattr(state, "user_input", "") or "")
                 context = str(getattr(state, "retrieved_context", "") or "")
+                memory_context = str(getattr(state, "memory_context", "") or "")
+                recent_history = str(getattr(state, "recent_history", "") or "")
             logger.info(f"llm_node[{node_id}] state keys={list(state.keys()) if isinstance(state, dict) else type(state)} user_input='{user_input[:50]}'")
 
             try:
@@ -241,10 +248,17 @@ class WorkflowBuilder:
                 api_key = os.environ.get("LITELLM_KEY", "sk-1234")
                 model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
 
-                # 用户消息: 附加上下文 (检索片段), LLM 基于真实知识回答
+                # 用户消息: 附加上下文 (知识库检索 + 用户记忆 + 最近对话)
                 user_msg = user_input
+                parts = []
+                if recent_history:
+                    parts.append(f"【最近对话 (用户短词请据此理解)】\n{recent_history}")
                 if context:
-                    user_msg = f"【知识库检索到的相关内容，请基于此回答，若无关联则如实说明】\n{context}\n\n【用户问题】\n{user_input}"
+                    parts.append(f"【TiMEM Space 知识库内容，请基于此回答，若无关联则如实说明】\n{context}")
+                if memory_context:
+                    parts.append(f"【该用户的历史记忆，可作为个性化参考】\n{memory_context}")
+                if parts:
+                    user_msg = f"{chr(10).join(parts)}\n\n【用户问题】\n{user_input}"
 
                 content = self._call_llm(base_url, api_key, model, prompt, user_msg)
                 logger.info(f"llm_node[{node_id}] model={model} len={len(content)}")
@@ -313,11 +327,11 @@ class WorkflowBuilder:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             data = _json.loads(resp.read().decode("utf-8"))
         return str(data["choices"][0]["message"]["content"] or "").strip()
 
-    def _make_capability_wrapper(self, capability_ref: str) -> Callable:
+    def _make_capability_wrapper(self, capability_ref: str, node_cfg: Optional[Dict[str, Any]] = None) -> Callable:
         """
         创建 Seam 能力调用的 wrapper。
 
@@ -326,10 +340,57 @@ class WorkflowBuilder:
 
         如果没有注入 seam_caller，返回一个占位函数，记录警告。
         """
-        def capability_node(state: Any) -> Dict[str, Any]:
+        output_keys = (node_cfg or {}).get("output_keys") or ["_capability_result"]
+
+        async def capability_node(state: Any) -> Dict[str, Any]:
             seam_caller = getattr(self, '_seam_caller', None)
             if seam_caller:
-                return seam_caller(capability_ref, state)
+                # 只透传必要字段, 避免巨型 state (如 retrieved_context) 经 RPC 传输拖垮超时
+                req = {}
+                if isinstance(state, dict):
+                    src = state
+                else:
+                    src = getattr(state, "__dict__", {}) or {}
+                for k in ("user_input", "user_id", "agent_id", "wecom_user_id",
+                          "query", "result", "content", "session_id", "limit"):
+                    if k in src:
+                        req[k] = src[k]
+                if "query" not in req and req.get("user_input"):
+                    req["query"] = req["user_input"]
+                if "user_id" not in req and req.get("wecom_user_id"):
+                    req["user_id"] = req["wecom_user_id"]
+
+                # 记忆写入节点: 构造 content = 问答对
+                if capability_ref == "@cognitive/timem-memory-write":
+                    q = req.get("user_input", "")
+                    a = req.get("result", "")
+                    if q or a:
+                        req["content"] = f"Q: {q}\nA: {a}" if q and a else (q or a)
+
+                result = seam_caller(capability_ref, req)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                # 结果 → 输出键: results 列表格式化为文本 (记忆召回)
+                output = {}
+                # 失败/错误结果: 输出空串, 绝不把内部错误信息泄漏给 LLM
+                if isinstance(result, dict) and result.get("error"):
+                    for k in output_keys:
+                        output[k] = ""
+                    output["total"] = 0
+                    logger.warning(f"capability '{capability_ref}' 返回错误, 已屏蔽: {str(result['error'])[:120]}")
+                elif isinstance(result, dict) and isinstance(result.get("results"), list):
+                    chunks = [
+                        str(item.get("content", "")) if isinstance(item, dict) else str(item)
+                        for item in result["results"]
+                    ]
+                    text = "\n\n".join([c for c in chunks if c])
+                    for k in output_keys:
+                        output[k] = text
+                    output["total"] = result.get("total", 0)
+                else:
+                    for k in output_keys:
+                        output[k] = result
+                return output
             logger.warning(f"capability_ref '{capability_ref}' 无 seam_caller, 透传当前状态")
             # LangGraph 要求至少写入一个 state key，这里透传原状态避免 InvalidUpdateError
             if hasattr(state, "items"):

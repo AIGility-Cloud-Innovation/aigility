@@ -110,9 +110,28 @@ class WorkflowEngine:
             self.build()
         return self._graph.invoke(state, config=config)
 
-    async def ainvoke(self, state: Any, config: Optional[Dict] = None) -> Any:
-        """异步执行工作流"""
-        if self._graph is None:
+    async def ainvoke(self, state: Any = None, config: Optional[Dict] = None,
+                      node_registry: Optional[Dict[str, Callable]] = None,
+                      condition_registry: Optional[Dict[str, Callable]] = None,
+                      **extra: Any) -> Any:
+        """异步执行工作流 (支持散装状态字段 kwargs, 与 invoke 相同兼容)"""
+        # 桥接兼容: state=None + extra → 合并为 dict
+        if state is None and extra:
+            state = dict(extra)
+        elif extra and not isinstance(state, dict):
+            state = {"state": state, **extra}
+        elif extra and isinstance(state, dict):
+            state = {**state, **extra}
+        elif state is None:
+            state = {}
+        needs_rebuild = False
+        if node_registry:
+            self.builder.register_nodes(node_registry)
+            needs_rebuild = True
+        if condition_registry:
+            self.builder.register_conditions(condition_registry)
+            needs_rebuild = True
+        if self._graph is None or needs_rebuild:
             self.build()
         return await self._graph.ainvoke(state, config=config)
 
