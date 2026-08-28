@@ -110,6 +110,13 @@ class WorkflowBuilder:
                 logger.warning(f"工作流配置文件格式错误: {self.config_path}")
                 return
 
+            # yaml 内的 node_module/condition_module 优先 (业务自包含), 未显式传时采用
+            # pydantic 默认忽略额外字段, node_module 不会进 WorkflowConfig
+            if not self.node_module:
+                self.node_module = workflow_data.get("node_module") or None
+            if not self.condition_module:
+                self.condition_module = workflow_data.get("condition_module") or None
+
             self.config = WorkflowConfig(**workflow_data)
             logger.info(f"成功加载工作流配置: {self.config.name}")
 
@@ -174,6 +181,23 @@ class WorkflowBuilder:
         # 4. 按 node_id 直接查找 (e.g. "my_node" → "my_node_node")
         node_func = self._import_node_function(f"{node_id}_node")
         if node_func:
+            # 节点静态参数 (yaml 的 params) 合并进 state 后调用
+            params = node_cfg.get("params") if isinstance(node_cfg, dict) else None
+            if params:
+                def wrap(state: Any, _params: Dict[str, Any] = params, _fn: Callable = node_func):
+                    if isinstance(state, dict):
+                        merged = {**state, **_params}
+                    else:
+                        merged = {**_params, "state": state} if not hasattr(state, "__dict__") else {**vars(state), **_params}
+                    out = _fn(merged)
+                    # 保留原 state (LangGraph dict 模式 replace 语义)
+                    if isinstance(state, dict) and isinstance(out, dict):
+                        merged_out = dict(state)
+                        merged_out.update(_params)
+                        merged_out.update(out)
+                        return merged_out
+                    return out
+                return wrap
             return node_func
 
         logger.error(f"找不到节点函数: {node_id}")
@@ -202,16 +226,19 @@ class WorkflowBuilder:
 
         LLM 端点配置 (环境变量):
           LITELLM_URL / LITELLM_KEY  — 兼容 OpenAI 协议的网关 (LiteLLM)
-          LLM_MODEL                  — 模型名 (默认 deepseek-v4-pro)
+          LLM_MODEL                  — 模型名 (默认 deepseek-v4-flash)
         未配置时降级为确定性回退文本（不崩，便于原型链路验证）。
         """
-        prompt_ref = node_cfg.get("prompt_ref")
+        prompt_ref = node_cfg.get("prompt_ref") or node_cfg.get("system_prompt")
         output_keys = node_cfg.get("output_keys") or ["result"]
 
         # 解析提示词: 支持 "module.prompt_name" 引用，或直接文本
         def _resolve_prompt() -> str:
             if not prompt_ref:
                 return "你是 aigility 智能助手。"
+            # 多行文本/含空格换行 → 直接当提示词 (业务配置内联)
+            if "\n" in prompt_ref or "  " in prompt_ref or prompt_ref.strip().startswith("你是"):
+                return prompt_ref
             if "." not in prompt_ref:
                 return prompt_ref  # 直接文本
             try:
@@ -263,10 +290,21 @@ class WorkflowBuilder:
                 content = self._call_llm(base_url, api_key, model, prompt, user_msg)
                 logger.info(f"llm_node[{node_id}] model={model} len={len(content)}")
 
-                # 写回输出键
+                # 写回输出键 (保留原 state, LangGraph dict 模式默认 replace 整个 state)
+                if isinstance(state, dict):
+                    base = dict(state)
+                elif hasattr(state, "__dict__"):
+                    base = dict(vars(state))
+                else:
+                    base = {}
                 if len(output_keys) == 1:
-                    return {output_keys[0]: content}
-                return {**{k: content for k in output_keys}, "user_input": user_input}
+                    base[output_keys[0]] = content
+                else:
+                    for k in output_keys:
+                        base[k] = content
+                    base["user_input"] = user_input
+                logger.info(f"llm_node[{node_id}] 输出 keys={list(base.keys())}")
+                return base
             except Exception as e:
                 logger.error(f"llm_node[{node_id}] LLM 调用失败: {e}")
                 fallback = (
@@ -372,6 +410,11 @@ class WorkflowBuilder:
                     result = await result
                 # 结果 → 输出键: results 列表格式化为文本 (记忆召回)
                 output = {}
+                # 保留原 state 其它字段 (LangGraph dict 模式默认 replace 语义)
+                if isinstance(state, dict):
+                    output = dict(state)
+                elif hasattr(state, "__dict__"):
+                    output = dict(vars(state))
                 # 失败/错误结果: 输出空串, 绝不把内部错误信息泄漏给 LLM
                 if isinstance(result, dict) and result.get("error"):
                     for k in output_keys:
