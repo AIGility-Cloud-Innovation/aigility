@@ -1,0 +1,177 @@
+name: Deploy to server
+
+on:
+  push:
+    branches: [test, main, pre, gzlh_main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    # 运行jobs的服务器，因gzlh_main分支的服务器限制端口22入站，因此使用自托管 runner，其他分支使用GitHub托管 Ubuntu 最新版本
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    env:
+      PROJECT_NAME_tmp: ${{ github.event.repository.name }}_${{ github.ref_name }}
+      # 根据分支选择不同的部署目标主机和用户，在 Actions 环境变量中拼接出完整的 Secret / Variable 名称
+      DEPLOY_HOST: ${{ github.ref_name }}_HOST
+      DEPLOY_USERNAME: ${{ github.ref_name }}_USERNAME #
+      DEPLOY_ENV_FILE: ${{ github.ref_name }}_ENV_FILE #
+      DEPLOY_APP_PORT: ${{ github.ref_name }}_APP_PORT
+      DEPLOY_FRONTEND_PORT: ${{ github.ref_name }}_FRONTEND_PORT
+      DEPLOY_DEPEND_SERVICES: ${{ github.ref_name }}_DEPEND_SERVICES
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up SSH
+        run: |
+          # 因Docker镜像名必须用小写字母，将仓库名转换为小写，导出为环境变量，供后续步骤使用
+          echo "PROJECT_NAME=${PROJECT_NAME_tmp,,}" >> $GITHUB_ENV
+
+          # 设置 SSH 密钥对，用于后续步骤的 SSH 操作
+          mkdir -p ~/.ssh
+          echo "${{ secrets.TEST_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Copy files to server
+        run: |
+          # 如果不存在以仓库名称命名的项目目录，则创建该目录。
+          ssh -o StrictHostKeyChecking=accept-new "${{ secrets[env.DEPLOY_USERNAME] || 'root' }}@${{ secrets[env.DEPLOY_HOST] }}" "mkdir -p /www/wwwroot/${PROJECT_NAME}"
+
+          # 使用 rsync 复制文件到服务器，忽略 .dockerignore 文件指定的文件
+          rsync -avz --delete --exclude-from=.dockerignore ./ ${{ secrets[env.DEPLOY_USERNAME] || 'root' }}@${{ secrets[env.DEPLOY_HOST] }}:/www/wwwroot/${PROJECT_NAME}/
+
+      - name: Copy .env to server
+        run: |
+          # 从 GitHub Secrets 生成 .env 文件，再 scp 到服务器
+          cat > .env <<EOF
+          ${{ secrets[env.DEPLOY_ENV_FILE] }}
+          EOF
+          scp .env "${{ secrets[env.DEPLOY_USERNAME] || 'root' }}@${{ secrets[env.DEPLOY_HOST] }}:/www/wwwroot/${PROJECT_NAME}/"
+          rm -f .env
+
+      - name: Deploy with Docker Compose
+        run: |
+          # 远程脚本将执行以下操作：
+          # - docker-compose.yml 文件中动态添加 app.depends_on 配置，确保 app 服务在依赖服务启动后启动
+          # - 如果缺失，自动拉取并启动 mysql/redis/chroma 等依赖服务
+          # - 总是构建并启动 app 服务，确保应用服务正常运行
+          ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 "${{ secrets[env.DEPLOY_USERNAME] || 'root' }}@${{ secrets[env.DEPLOY_HOST] }}" "PROJECT_NAME='${PROJECT_NAME}' APP_PORT='${{ vars[env.DEPLOY_APP_PORT] || '8000' }}' DEPEND_SERVICES='${{ vars[env.DEPLOY_DEPEND_SERVICES] }}' COMMIT='${GITHUB_SHA:0:7}' ACTOR='${{ github.actor }}' FRONTEND_PORT='${{ vars[env.DEPLOY_FRONTEND_PORT] || '3000' }}' ENV_SUFFIX='${{ github.ref_name }}' bash -s" <<'EOF'
+          set -euo pipefail #「严格模式」配置，能让 Shell 脚本更健壮、更易调试，避免因静默错误、未定义变量、管道失败等问题导致脚本执行出意外结果
+          cd /www/wwwroot/${PROJECT_NAME}/aigility_sdk_web
+
+          compose_file="docker-compose.yml"
+          # 动态探测 app.depends_on 的缩进（保持与现有 yml 风格一致）
+          # - dep_key_indent: depends_on: 所在行前导空格数
+          # - dep_item_indent: depends_on 下一级 key（如 mysql:）的前导空格数
+          # - dep_cond_indent: condition: 的前导空格数
+          dep_key_indent=$(
+            awk '
+              function indent_len(line) {
+                match(line, /^[ ]*/)
+                return RLENGTH
+              }
+              BEGIN { in_app = 0; app_indent = -1 }
+              /^[[:space:]]*app:[[:space:]]*$/ {
+                in_app = 1
+                app_indent = indent_len($0)
+                next
+              }
+              in_app {
+                cur_indent = indent_len($0)
+                # 遇到同级或更浅缩进的 "xxx:" 视为离开 app 块（下一个 service 或上层 key）
+                if (cur_indent <= app_indent && $0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/) {
+                  in_app = 0
+                }
+              }
+              in_app && /^[[:space:]]*image:[[:space:]]/ {
+                print indent_len($0)
+                exit
+              }
+            ' "$compose_file" 2>/dev/null || true
+          )
+          # 检查是否检测到 image: 行，若未则默认缩进为 4 个空格
+          if [[ -z "${dep_key_indent:-}" ]]; then
+            dep_key_indent=4
+          fi
+          dep_item_indent=$((dep_key_indent + 2))
+          dep_cond_indent=$((dep_key_indent + 4))
+          # 缩进空格准备
+          dep_item_prefix="$(printf '%*s' "$dep_item_indent" '')"
+          dep_cond_prefix="$(printf '%*s' "$dep_cond_indent" '')"
+          # 按照正确计算的缩进，输出所依赖服务的 depends_on 配置
+          real_depends=`echo "$DEPEND_SERVICES" | sed 's/\b\(app\|frontend\)\b//g; s/[[:space:]]\+/ /g; s/^ //; s/ $//'`
+          # 输出 depends_on: 行
+          if [[ -n "$real_depends" ]]; then
+            dep_key_prefix="$(printf '%*s' "$dep_key_indent" '')"
+            printf '%sdepends_on:\n' "$dep_key_prefix" >> "$compose_file"
+          fi
+          for svc in $real_depends; do
+            # echo "      $svc:" >> $compose_file
+            # echo "        condition: service_healthy" >> $compose_file
+            printf '%s%s:\n' "$dep_item_prefix" "$svc" >> "$compose_file"
+            printf '%scondition: service_healthy\n' "$dep_cond_prefix" >> "$compose_file"
+          done
+
+          # 过滤掉 celeryworker 和 app 和 frontend 服务，并且移除多余空格，只保留第三方依赖服务
+          real_depends_3p=`echo "$DEPEND_SERVICES" | sed 's/\b\(celeryworker\|celeryworker_import\|celeryworker_eval\|app\|frontend\)\b//g; s/[[:space:]]\+/ /g; s/^ //; s/ $//'`
+          if [[ -n "$real_depends_3p" ]]; then
+            # 启动依赖服务（无服务/服务停止/服务异常/compose配置变化时重启，无预构建镜像时自动拉取）
+            docker compose -f $compose_file up -d $real_depends_3p
+          fi
+
+          # 只构建一次 app 镜像（所有 celery worker 和 app 服务都使用这个镜像）
+          if echo "$DEPEND_SERVICES" | grep -iw "app"; then
+            COMPOSE_BAKE=true DOCKER_BUILDKIT=1 docker compose -f "$compose_file" build app
+          fi
+
+          # 构建前端镜像（根据分支选择对应的 env 文件，通过 ENV_SUFFIX 传入 compose build args）
+          if echo "$DEPEND_SERVICES" | grep -iw "frontend"; then
+            COMPOSE_BAKE=true DOCKER_BUILDKIT=1 docker compose -f "$compose_file" build frontend
+          fi
+
+          # 启动 celery worker 服务，并根据 CPU 核数调整并发数
+          CPU_CORES=$(nproc)
+          # 确保 CPU 核心数至少为 2
+          CPU_CORES=${CPU_CORES:-2}
+          if echo "$DEPEND_SERVICES" | grep -iw "celeryworker"; then
+            export MAX1=$((CPU_CORES*1)) MIN1=$((CPU_CORES*1/2))
+            docker compose -f "$compose_file" up -d celeryworker
+          fi
+          if echo "$DEPEND_SERVICES" | grep -iw "celeryworker_import"; then
+            export MAX2=$((CPU_CORES*3/2)) MIN2=$((CPU_CORES*1))
+            docker compose -f "$compose_file" up -d celeryworker_import
+          fi
+          if echo "$DEPEND_SERVICES" | grep -iw "celeryworker_eval"; then
+            export MAX3=$((CPU_CORES*6)) MIN3=$((CPU_CORES*3))
+            docker compose -f "$compose_file" up -d celeryworker_eval
+          fi
+
+          # 启动 app/frontend 服务（新实例起不来，就不会替换旧实例，旧容器照常跑）
+          # 和 autoheal 服务（监控所有带 autoheal_${PROJECT_NAME}=true 标签的容器，自动重启 unhealthy 状态的容器）
+          up_services=""
+          if echo "$DEPEND_SERVICES" | grep -iw "app"; then
+            up_services="$up_services app"
+          fi
+          if echo "$DEPEND_SERVICES" | grep -iw "frontend"; then
+            up_services="$up_services frontend"
+          fi
+          if [[ -n "$up_services" ]]; then
+            docker compose -f "$compose_file" up -d $up_services autoheal
+          fi
+
+          echo -e "项目部署已完成\n"
+
+          # 清理旧的 app 和 frontend 镜像，保留最新的 8 个
+          docker images --filter=reference="${PROJECT_NAME}_app" -q | tail -n +9 | xargs -r docker rmi -f && echo "清理旧的 app 镜像...已完成" || true
+          docker images --filter=reference="${PROJECT_NAME}_frontend" -q | tail -n +9 | xargs -r docker rmi -f && echo "清理旧的 frontend 镜像...已完成" || true
+
+          # 发送飞书机器人消息
+          json_data='{"msg_type":"text","content":{"text":"'"${PROJECT_NAME}:${COMMIT}项目部署完成(${ACTOR})"'"}}'
+          notify_response=$(curl -sS -X POST -H "Content-Type: application/json" -d "$json_data" https://open.feishu.cn/open-apis/bot/v2/hook/d681a6de-5feb-432d-8c74-7b0d1cc87f24 || true)
+          if echo "$notify_response" | grep -iq 'success'; then
+            echo "飞书机器人消息发送成功"
+          else
+            echo "飞书机器人消息发送失败: ${notify_response}"
+          fi
+          EOF
