@@ -16,6 +16,10 @@ env/
 ENV/
 .venv
 .env
+cache/
+.cache/
+timem_kb_index.json
+__cache__/
 
 # IDE
 .idea/

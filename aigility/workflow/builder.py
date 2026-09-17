@@ -20,6 +20,7 @@ WorkflowBuilder — 从 YAML 配置文件构建 LangGraph 工作流。
 """
 
 import os
+import asyncio
 import logging
 import importlib
 import yaml
@@ -109,6 +110,13 @@ class WorkflowBuilder:
                 logger.warning(f"工作流配置文件格式错误: {self.config_path}")
                 return
 
+            # yaml 内的 node_module/condition_module 优先 (业务自包含), 未显式传时采用
+            # pydantic 默认忽略额外字段, node_module 不会进 WorkflowConfig
+            if not self.node_module:
+                self.node_module = workflow_data.get("node_module") or None
+            if not self.condition_module:
+                self.condition_module = workflow_data.get("condition_module") or None
+
             self.config = WorkflowConfig(**workflow_data)
             logger.info(f"成功加载工作流配置: {self.config.name}")
 
@@ -144,6 +152,11 @@ class WorkflowBuilder:
           3. capability_ref → 返回 Seam 能力调用 wrapper
           4. 从 nodes 模块动态导入 (fallback)
         """
+        # 0. 按节点类型分发: llm_node → LLM 调用闭包
+        node_cfg = self.raw_config.get("workflow", {}).get("nodes", {}).get(node_id, {})
+        if isinstance(node_cfg, dict) and node_cfg.get("type") == "llm_node":
+            return self._make_llm_node(node_id, node_cfg)
+
         # 1. 运行时注册表
         if node_id in self.node_registry:
             return self.node_registry[node_id]
@@ -161,14 +174,30 @@ class WorkflowBuilder:
                 return node_func
 
         # 3. capability_ref (Seam 能力调用)
-        node_cfg = self.raw_config.get("workflow", {}).get("nodes", {}).get(node_id, {})
         if isinstance(node_cfg, dict) and "capability_ref" in node_cfg:
             cap_ref = node_cfg["capability_ref"]
-            return self._make_capability_wrapper(cap_ref)
+            return self._make_capability_wrapper(cap_ref, node_cfg)
 
         # 4. 按 node_id 直接查找 (e.g. "my_node" → "my_node_node")
         node_func = self._import_node_function(f"{node_id}_node")
         if node_func:
+            # 节点静态参数 (yaml 的 params) 合并进 state 后调用
+            params = node_cfg.get("params") if isinstance(node_cfg, dict) else None
+            if params:
+                def wrap(state: Any, _params: Dict[str, Any] = params, _fn: Callable = node_func):
+                    if isinstance(state, dict):
+                        merged = {**state, **_params}
+                    else:
+                        merged = {**_params, "state": state} if not hasattr(state, "__dict__") else {**vars(state), **_params}
+                    out = _fn(merged)
+                    # 保留原 state (LangGraph dict 模式 replace 语义)
+                    if isinstance(state, dict) and isinstance(out, dict):
+                        merged_out = dict(state)
+                        merged_out.update(_params)
+                        merged_out.update(out)
+                        return merged_out
+                    return out
+                return wrap
             return node_func
 
         logger.error(f"找不到节点函数: {node_id}")
@@ -188,7 +217,159 @@ class WorkflowBuilder:
                 return None
         return None
 
-    def _make_capability_wrapper(self, capability_ref: str) -> Callable:
+    def _make_llm_node(self, node_id: str, node_cfg: Dict[str, Any]) -> Callable:
+        """
+        创建 LLM 节点闭包。
+
+        llm_node 通过 prompt_ref 引用提示词（格式: module.prompt_name 或
+        直接文本），把 state 中的 user_input 传给 LLM，返回生成文本。
+
+        LLM 端点配置 (环境变量):
+          LITELLM_URL / LITELLM_KEY  — 兼容 OpenAI 协议的网关 (LiteLLM)
+          LLM_MODEL                  — 模型名 (默认 deepseek-v4-flash)
+        未配置时降级为确定性回退文本（不崩，便于原型链路验证）。
+        """
+        prompt_ref = node_cfg.get("prompt_ref") or node_cfg.get("system_prompt")
+        output_keys = node_cfg.get("output_keys") or ["result"]
+
+        # 解析提示词: 支持 "module.prompt_name" 引用，或直接文本
+        def _resolve_prompt() -> str:
+            if not prompt_ref:
+                return "你是 aigility 智能助手。"
+            # 多行文本/含空格换行 → 直接当提示词 (业务配置内联)
+            if "\n" in prompt_ref or "  " in prompt_ref or prompt_ref.strip().startswith("你是"):
+                return prompt_ref
+            if "." not in prompt_ref:
+                return prompt_ref  # 直接文本
+            try:
+                mod_name, prompt_name = prompt_ref.rsplit(".", 1)
+                mod = importlib.import_module(mod_name)
+                p = getattr(mod, prompt_name)
+                return p if isinstance(p, str) else str(p)
+            except (ImportError, AttributeError):
+                logger.warning(f"prompt_ref '{prompt_ref}' 解析失败，使用默认提示词")
+                return "你是 aigility 智能助手。"
+
+        prompt = _resolve_prompt()
+
+        def llm_node(state: Any) -> Dict[str, Any]:
+            # 提取用户输入
+            user_input = ""
+            context = ""
+            memory_context = ""
+            recent_history = ""
+            if isinstance(state, dict):
+                user_input = str(state.get("user_input", state.get("input", "")) or "")
+                context = str(state.get("retrieved_context", state.get("context", "")) or "")
+                memory_context = str(state.get("memory_context", "") or "")
+                recent_history = str(state.get("recent_history", "") or "")
+            else:
+                user_input = str(getattr(state, "user_input", "") or "")
+                context = str(getattr(state, "retrieved_context", "") or "")
+                memory_context = str(getattr(state, "memory_context", "") or "")
+                recent_history = str(getattr(state, "recent_history", "") or "")
+            logger.info(f"llm_node[{node_id}] state keys={list(state.keys()) if isinstance(state, dict) else type(state)} user_input='{user_input[:50]}'")
+
+            try:
+                base_url = os.environ.get("LITELLM_URL", "http://127.0.0.1:48724")
+                api_key = os.environ.get("LITELLM_KEY", "sk-1234")
+                model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
+
+                # 用户消息: 附加上下文 (知识库检索 + 用户记忆 + 最近对话)
+                user_msg = user_input
+                parts = []
+                if recent_history:
+                    parts.append(f"【最近对话 (用户短词请据此理解)】\n{recent_history}")
+                if context:
+                    parts.append(f"【TiMEM Space 知识库内容，请基于此回答，若无关联则如实说明】\n{context}")
+                if memory_context:
+                    parts.append(f"【该用户的历史记忆，可作为个性化参考】\n{memory_context}")
+                if parts:
+                    user_msg = f"{chr(10).join(parts)}\n\n【用户问题】\n{user_input}"
+
+                content = self._call_llm(base_url, api_key, model, prompt, user_msg)
+                logger.info(f"llm_node[{node_id}] model={model} len={len(content)}")
+
+                # 写回输出键 (保留原 state, LangGraph dict 模式默认 replace 整个 state)
+                if isinstance(state, dict):
+                    base = dict(state)
+                elif hasattr(state, "__dict__"):
+                    base = dict(vars(state))
+                else:
+                    base = {}
+                if len(output_keys) == 1:
+                    base[output_keys[0]] = content
+                else:
+                    for k in output_keys:
+                        base[k] = content
+                    base["user_input"] = user_input
+                logger.info(f"llm_node[{node_id}] 输出 keys={list(base.keys())}")
+                return base
+            except Exception as e:
+                logger.error(f"llm_node[{node_id}] LLM 调用失败: {e}")
+                fallback = (
+                    f"（llm_node 降级）无法连接 LLM 服务: {e}\n"
+                    f"收到消息: {user_input}"
+                )
+                if len(output_keys) == 1:
+                    return {output_keys[0]: fallback}
+                return {**{k: fallback for k in output_keys}, "user_input": user_input}
+
+        return llm_node
+
+    def _call_llm(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        prompt: str,
+        user_input: str,
+    ) -> str:
+        """调用 OpenAI 兼容协议 LLM 端点 (LiteLLM 网关)。"""
+        # 优先尝试 litellm 库；不存在则用标准库 urllib 调 OpenAI 兼容 API
+        try:
+            from litellm import completion
+
+            resp = completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_input},
+                ],
+                api_base=base_url,
+                api_key=api_key,
+                temperature=0.7,
+            )
+            return str(resp.choices[0].message.content or "").strip()
+        except ImportError:
+            pass
+
+        # 标准库回退: urllib 调 /v1/chat/completions
+        import json as _json
+        import urllib.request
+
+        body = _json.dumps({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "temperature": 0.7,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/v1/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        return str(data["choices"][0]["message"]["content"] or "").strip()
+
+    def _make_capability_wrapper(self, capability_ref: str, node_cfg: Optional[Dict[str, Any]] = None) -> Callable:
         """
         创建 Seam 能力调用的 wrapper。
 
@@ -197,10 +378,62 @@ class WorkflowBuilder:
 
         如果没有注入 seam_caller，返回一个占位函数，记录警告。
         """
-        def capability_node(state: Any) -> Dict[str, Any]:
+        output_keys = (node_cfg or {}).get("output_keys") or ["_capability_result"]
+
+        async def capability_node(state: Any) -> Dict[str, Any]:
             seam_caller = getattr(self, '_seam_caller', None)
             if seam_caller:
-                return seam_caller(capability_ref, state)
+                # 只透传必要字段, 避免巨型 state (如 retrieved_context) 经 RPC 传输拖垮超时
+                req = {}
+                if isinstance(state, dict):
+                    src = state
+                else:
+                    src = getattr(state, "__dict__", {}) or {}
+                for k in ("user_input", "user_id", "agent_id", "wecom_user_id",
+                          "query", "result", "content", "session_id", "limit"):
+                    if k in src:
+                        req[k] = src[k]
+                if "query" not in req and req.get("user_input"):
+                    req["query"] = req["user_input"]
+                if "user_id" not in req and req.get("wecom_user_id"):
+                    req["user_id"] = req["wecom_user_id"]
+
+                # 记忆写入节点: 构造 content = 问答对
+                if capability_ref == "@cognitive/timem-memory-write":
+                    q = req.get("user_input", "")
+                    a = req.get("result", "")
+                    if q or a:
+                        req["content"] = f"Q: {q}\nA: {a}" if q and a else (q or a)
+
+                result = seam_caller(capability_ref, req)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                # 结果 → 输出键: results 列表格式化为文本 (记忆召回)
+                output = {}
+                # 保留原 state 其它字段 (LangGraph dict 模式默认 replace 语义)
+                if isinstance(state, dict):
+                    output = dict(state)
+                elif hasattr(state, "__dict__"):
+                    output = dict(vars(state))
+                # 失败/错误结果: 输出空串, 绝不把内部错误信息泄漏给 LLM
+                if isinstance(result, dict) and result.get("error"):
+                    for k in output_keys:
+                        output[k] = ""
+                    output["total"] = 0
+                    logger.warning(f"capability '{capability_ref}' 返回错误, 已屏蔽: {str(result['error'])[:120]}")
+                elif isinstance(result, dict) and isinstance(result.get("results"), list):
+                    chunks = [
+                        str(item.get("content", "")) if isinstance(item, dict) else str(item)
+                        for item in result["results"]
+                    ]
+                    text = "\n\n".join([c for c in chunks if c])
+                    for k in output_keys:
+                        output[k] = text
+                    output["total"] = result.get("total", 0)
+                else:
+                    for k in output_keys:
+                        output[k] = result
+                return output
             logger.warning(f"capability_ref '{capability_ref}' 无 seam_caller, 透传当前状态")
             # LangGraph 要求至少写入一个 state key，这里透传原状态避免 InvalidUpdateError
             if hasattr(state, "items"):
