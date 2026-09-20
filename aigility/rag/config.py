@@ -128,6 +128,9 @@ class PayloadIndexConfig(BaseModel):
             PayloadIndexField(field_name="metadata.chunk_index", field_type="integer"),
             PayloadIndexField(field_name="metadata.is_deleted", field_type="keyword"),
             PayloadIndexField(field_name="metadata.content_type", field_type="keyword"),
+            # 单全局 collection 方案：租户隔离检索必需索引
+            PayloadIndexField(field_name="metadata.user_id", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.kb_id", field_type="keyword"),
             PayloadIndexField(field_name="metadata.heading", field_type="keyword"),
             PayloadIndexField(field_name="metadata.parent_chunk_id", field_type="keyword"),
         ],
