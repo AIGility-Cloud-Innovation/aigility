@@ -7,7 +7,7 @@ import shutil
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Callable, Optional, Dict, List
+from typing import Callable, Optional, Dict, List, Any
 from collections import defaultdict
 
 from .usage_tracking import UsageStats, TokenUsage, SearchResult, AddFileResult
@@ -273,7 +273,12 @@ class RAGService:
         # 返回前 top_k 个文档
         return [doc for doc, score in scored_docs[:top_k]]
 
-    def add_file(self, file_path: str, auto_build_bm25: bool = True) -> AddFileResult:
+    def add_file(
+        self,
+        file_path: str,
+        auto_build_bm25: bool = True,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AddFileResult:
             """
             加载文件 -> 智能解析 -> 注入上下文元数据 -> 存入向量库
 
@@ -281,6 +286,8 @@ class RAGService:
                 file_path: 文件路径
                 auto_build_bm25: 是否自动构建BM25索引（默认True）
                                  批量添加文件时建议设为False，最后统一调用build_bm25_index()
+                metadata: 可选租户身份字段（如 user_id/kb_id），注入每个 chunk 的 metadata
+                           即 payload.metadata.{key}，供 Qdrant filter 做租户隔离检索
 
             Returns:
                 AddFileResult 对象，包含：
@@ -414,6 +421,14 @@ class RAGService:
                 total_chunks = len(chunks)
                 created_at = datetime.now(timezone.utc).isoformat()
 
+                # 单全局 collection 方案：注入租户身份字段到 chunk.metadata
+                # （落库后即 payload.metadata.{key}，配合 search(filter=...) 做隔离检索）
+                if metadata:
+                    for _chunk in chunks:
+                        for _k, _v in metadata.items():
+                            if _v is not None:
+                                _chunk.metadata[_k] = _v
+
                 if self.config.ingestion.enable_small2big:
                     # Small2Big: parent_text 已由 splitter 注入 metadata
                     # 这里只需要注入 file_hash 相关的元数据和 parent_chunk_id
@@ -492,7 +507,13 @@ class RAGService:
             except Exception as e:
                 logging.error(f"❌ Error adding file {file_path}: {str(e)}")
                 raise e
-    def search(self, query: str, expand_context: bool = True, enable_keyword_boost: bool = True) -> SearchResult:
+    def search(
+        self,
+        query: str,
+        expand_context: bool = True,
+        enable_keyword_boost: bool = True,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> SearchResult:
         """
         检索并融合上下文（使用BM25混合检索）
 
@@ -529,7 +550,8 @@ class RAGService:
                 query=query,
                 semantic_weight=semantic_weight,
                 bm25_weight=bm25_weight,
-                expand_context=expand_context
+                expand_context=expand_context,
+                filter=filter
             )
             self._total_usage += result.usage
             self._notify_usage(result.usage)
@@ -538,7 +560,7 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ Search failed: {str(e)}")
             # 降级策略：使用纯语义检索
-            docs = self._search_with_filter(query, k=self.config.search_top_k)
+            docs = self._search_with_filter(query, k=self.config.search_top_k, filter=filter)
             content = self._format_search_results(docs, expand_context)
             fallback_usage = UsageStats(
                 embedding=self._embedding_wrapper.last_usage or TokenUsage()
@@ -597,13 +619,20 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ 清空知识库失败: {str(e)}")
 
-    def _search_with_filter(self, query: str, k: int = 5) -> List:
+    def _search_with_filter(
+        self,
+        query: str,
+        k: int = 5,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List:
         """
         带过滤条件的检索，只返回未删除的chunk
 
         Args:
             query: 查询文本
             k: 返回结果数量
+            filter: 可选租户过滤字典（如 {"metadata.user_id": ..., "metadata.kb_id": ...}），
+                    与默认 is_deleted 过滤合并
 
         Returns:
             检索结果列表
@@ -614,18 +643,24 @@ class RAGService:
 
             if vector_store_type == "chroma":
                 # Chroma使用where参数过滤
+                _chroma_filter = {"is_deleted": {"$ne": True}}  # is_deleted != True
+                if filter:
+                    _chroma_filter.update(filter)
                 docs = self.vector_store.similarity_search(
                     query,
                     k=k,
-                    filter={"is_deleted": {"$ne": True}}  # is_deleted != True
+                    filter=_chroma_filter
                 )
             elif vector_store_type == "qdrant":
                 # Qdrant: 使用字典格式的filter
                 # LangChain 的 Qdrant adapter 接受字典格式的 filter
+                _qdrant_filter = {"is_deleted": False}
+                if filter:
+                    _qdrant_filter.update(filter)
                 docs = self.vector_store.similarity_search(
                     query,
                     k=k,
-                    filter={"is_deleted": False}
+                    filter=_qdrant_filter
                 )
             else:
                 # 其他向量库，先检索然后手动过滤
@@ -1130,7 +1165,8 @@ class RAGService:
         query: str,
         semantic_weight: float = 0.6,
         bm25_weight: float = 0.4,
-        expand_context: bool = True
+        expand_context: bool = True,
+        filter: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         """
         BM25混合检索：结合语义检索和关键词检索
@@ -1163,7 +1199,9 @@ class RAGService:
                 self.build_bm25_index()
 
             # 1. 语义检索
-            semantic_docs = self._search_with_filter(query, k=self.config.search_top_k * 3)
+            semantic_docs = self._search_with_filter(
+                query, k=self.config.search_top_k * 3, filter=filter
+            )
             if self._embedding_wrapper.last_usage:
                 search_usage.embedding = search_usage.embedding + self._embedding_wrapper.last_usage
                 self._embedding_wrapper.reset_usage()
@@ -1248,7 +1286,9 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ BM25混合检索失败: {e}")
             # 降级到纯语义检索
-            semantic_docs = self._search_with_filter(query, k=self.config.search_top_k)
+            semantic_docs = self._search_with_filter(
+                query, k=self.config.search_top_k, filter=filter
+            )
             content = self._format_search_results(semantic_docs, expand_context)
             return SearchResult(
                 content=content,

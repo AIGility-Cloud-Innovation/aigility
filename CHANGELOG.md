@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [0.1.5] - 2026-09-21
+
+### 新增
+- **单全局 Qdrant collection 多租户支持**（Qdrant 官方推荐方案，修复 collection 数量膨胀导致 mmap 耗尽/启动超时）
+  - `add_file(..., metadata=None)`：向每个 chunk.metadata 注入租户身份字段（落库即 `payload.metadata.user_id/kb_id`）
+  - `search / search_bm25_hybrid / _search_with_filter` 新增 `filter` 参数，与默认 `is_deleted` 过滤合并，实现租户级隔离检索
+  - payload 默认索引新增 `metadata.user_id`、`metadata.kb_id`（keyword），提升过滤检索性能
+
+### 兼容性
+- 参数全部可选，默认行为与 0.1.3 完全一致（不传 filter 时行为不变）
+
 ## [0.1.3] - 2026-05-27
 
 ### 新增
