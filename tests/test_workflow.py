@@ -255,6 +255,131 @@ def test_save_yaml_roundtrip():
         os.unlink(out_path)
 
 
+# ── run_yaml_workflow 一键运行 ────────────────────────────────
+
+# 自包含 llm_node fixture: 无需函数注册/外部模块, LLM 不可用时降级为回退文本
+_RUN_YAML_FIXTURE_YAML = """\
+workflow:
+  name: "run_yaml_fixture"
+  description: "run_yaml_workflow 测试配置"
+  entry_point: "start"
+  nodes:
+    start:
+      type: "llm_node"
+      description: "回显节点"
+      prompt_ref: "你是回显测试节点，直接返回收到的内容。"
+      output_keys: ["result"]
+  flow:
+    edges:
+      - from: "start"
+        to: "__end__"
+"""
+
+_RUN_YAML_NO_RESULT_YAML = """\
+workflow:
+  name: "run_yaml_fixture_no_result"
+  description: "output_keys 不含 result 的回退分支测试"
+  entry_point: "start"
+  nodes:
+    start:
+      type: "llm_node"
+      description: "自定义输出键"
+      prompt_ref: "你是回显测试节点。"
+      output_keys: ["answer"]
+  flow:
+    edges:
+      - from: "start"
+        to: "__end__"
+"""
+
+
+def _write_yaml_fixture(content: str) -> str:
+    """写 fixture YAML 到临时文件, 返回路径 (调用方负责 unlink)"""
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(content)
+        return f.name
+
+
+def test_run_yaml_workflow_happy_path():
+    """测试: 自包含 YAML 一键运行, 返回 result 键的 JSON 安全值"""
+    import json
+    from aigility.workflow import run_yaml_workflow
+
+    path = _write_yaml_fixture(_RUN_YAML_FIXTURE_YAML)
+    try:
+        result = run_yaml_workflow(path, user_input="你好")
+        # LLM 成功或降级都返回 str; 只锁类型与 JSON 可序列化, 不锁具体文本
+        assert isinstance(result, str), f"result 应为 str, got {type(result)}"
+        json.dumps(result, ensure_ascii=False)
+        print(f"  ✅ happy path: result={result[:40]!r}")
+    finally:
+        os.unlink(path)
+
+
+def test_run_yaml_workflow_no_result_fallback():
+    """测试: output_keys 不含 result 时, 回退返回整个最终 state (JSON 安全 dict)"""
+    import json
+    from aigility.workflow import run_yaml_workflow
+
+    path = _write_yaml_fixture(_RUN_YAML_NO_RESULT_YAML)
+    try:
+        result = run_yaml_workflow(path, user_input="测试")
+        assert isinstance(result, dict), f"回退应返回整个 state dict, got {type(result)}"
+        assert "answer" in result, f"应含 output_key 'answer', got {list(result.keys())}"
+        assert "result" not in result, "不应含 result 键"
+        json.dumps(result, ensure_ascii=False)
+        print(f"  ✅ 回退分支: state keys={list(result.keys())}")
+    finally:
+        os.unlink(path)
+
+
+def test_run_yaml_workflow_error_propagation():
+    """测试: 配置文件不存在 → RuntimeError 上抛 (worker 报错策略)"""
+    from aigility.workflow import run_yaml_workflow
+
+    try:
+        run_yaml_workflow("/nonexistent/path/config.yaml", user_input="x")
+        raise AssertionError("应上抛 RuntimeError")
+    except RuntimeError as e:
+        assert "工作流配置未加载" in str(e), f"消息应含'工作流配置未加载', got {e}"
+        print("  ✅ 错误上抛: RuntimeError(工作流配置未加载...)")
+
+
+def test_json_safe():
+    """测试: _json_safe 序列化策略 (default=str 降级 + 中文原样 + 无损 roundtrip)"""
+    import datetime
+    from aigility.workflow.runtime import _json_safe
+
+    plain = {"中文": "你好", "n": [1, 2.5, True, None, {"k": "v"}]}
+    assert _json_safe(plain) == plain, "可序列化对象应无损 roundtrip"
+
+    dt = datetime.datetime(2026, 9, 27, 10, 0, 0)
+    out = _json_safe({"t": dt, "s": {1, 2}})
+    assert isinstance(out["t"], str) and "2026" in out["t"], "datetime 应降级为 str"
+    assert isinstance(out["s"], str), "set 应降级为 str (default=str 语义)"
+
+    cn = _json_safe({"msg": "中文不转义"})
+    assert cn["msg"] == "中文不转义", "ensure_ascii=False 应保留中文"
+    print("  ✅ _json_safe: 无损 roundtrip + default=str 降级 + 中文原样")
+
+
+def test_arun_yaml_workflow_smoke():
+    """测试: 异步入口冒烟, 与同步版行为一致"""
+    import asyncio
+    from aigility.workflow import arun_yaml_workflow
+
+    path = _write_yaml_fixture(_RUN_YAML_FIXTURE_YAML)
+    try:
+        result = asyncio.run(arun_yaml_workflow(path, user_input="异步"))
+        assert isinstance(result, str), f"异步 result 应为 str, got {type(result)}"
+        print("  ✅ 异步冒烟: 与同步版一致返回 JSON 安全 str")
+    finally:
+        os.unlink(path)
+
+
 if __name__ == "__main__":
     print("=== aigility WorkflowBuilder 测试 ===\n")
 
@@ -272,5 +397,20 @@ if __name__ == "__main__":
 
     print("\n5. save_yaml 读写闭环")
     test_save_yaml_roundtrip()
+
+    print("\n6. run_yaml_workflow happy path")
+    test_run_yaml_workflow_happy_path()
+
+    print("\n7. run_yaml_workflow 无 result 回退")
+    test_run_yaml_workflow_no_result_fallback()
+
+    print("\n8. run_yaml_workflow 错误上抛")
+    test_run_yaml_workflow_error_propagation()
+
+    print("\n9. _json_safe 序列化策略")
+    test_json_safe()
+
+    print("\n10. arun_yaml_workflow 异步冒烟")
+    test_arun_yaml_workflow_smoke()
 
     print("\n=== 全部通过 ===")

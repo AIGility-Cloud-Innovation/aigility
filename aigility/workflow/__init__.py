@@ -8,6 +8,7 @@ ADK Workflow - 工作流引擎模块
   - WorkflowEngine: 封装 WorkflowBuilder，提供 invoke/stream 接口
   - schema: 工作流配置的 Pydantic 模型
   - io: 配置的 YAML 序列化 (save_yaml)
+  - runtime: 自包含 YAML 的一键运行入口 (run_yaml_workflow)
 
 使用方式:
     from aigility.workflow import WorkflowEngine
@@ -31,6 +32,7 @@ from .schema import (
     ConditionalEdgeBranch,
 )
 from .io import save_yaml
+from .runtime import run_yaml_workflow, arun_yaml_workflow
 
 __all__ = [
     # 引擎
@@ -48,4 +50,7 @@ __all__ = [
     "ConditionalEdgeBranch",
     # IO
     "save_yaml",
+    # Runtime
+    "run_yaml_workflow",
+    "arun_yaml_workflow",
 ]
