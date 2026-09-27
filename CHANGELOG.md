@@ -19,6 +19,7 @@
 ### 修复
 
 - 修复仅安装核心包时，公共导入路径仍可触发可选依赖加载的问题。
+- 修复 `capability_node` 在同步 `invoke` 下报 "No synchronous function provided" 的问题：节点包装改为同步/异步双路径（langgraph `RunnableCallable`），同步与异步调用均原生可用。
 ## [0.1.5] - 2026-09-21
 
 ### 新增

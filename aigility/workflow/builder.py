@@ -23,13 +23,47 @@ import os
 import asyncio
 import logging
 import importlib
+import threading
 import yaml
 from typing import Dict, Any, Optional, Callable, Type
 from langgraph.graph import StateGraph, END
 
+try:
+    # 同步/异步双路径节点: 使 capability wrapper 在 invoke 与 ainvoke 下都原生可用
+    from langgraph.utils.runnable import RunnableCallable
+except ImportError:  # 旧版 langgraph 无该内部类时退化为纯同步 wrapper
+    RunnableCallable = None
+
 from .schema import WorkflowConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _run_coroutine_sync(coro: Any) -> Any:
+    """在当前线程执行完协程并返回结果。
+
+    当前线程已有事件循环在运行时 (如同步 invoke 嵌套在 async 上下文中),
+    asyncio.run 会抛 RuntimeError, 此时改由独立线程执行。
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    outcome: Dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            outcome["value"] = asyncio.run(coro)
+        except BaseException as e:
+            outcome["error"] = e
+
+    thread = threading.Thread(target=_worker)
+    thread.start()
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome.get("value")
 
 
 def _resolve_dotted_path(path: str) -> Any:
@@ -376,71 +410,93 @@ class WorkflowBuilder:
         当节点配置了 capability_ref 时，节点执行时调用 harness Seam 能力。
         实际的 Seam 调用由外部注入 (harness py-bridge)。
 
-        如果没有注入 seam_caller，返回一个占位函数，记录警告。
+        返回同步/异步双路径节点: invoke 走同步实现 (seam_caller 返回协程时
+        经 _run_coroutine_sync 跑完), ainvoke 走原生异步实现。
+        未注入 seam_caller 时执行时透传当前状态并记录警告。
         """
         output_keys = (node_cfg or {}).get("output_keys") or ["_capability_result"]
 
-        async def capability_node(state: Any) -> Dict[str, Any]:
-            seam_caller = getattr(self, '_seam_caller', None)
-            if seam_caller:
-                # 只透传必要字段, 避免巨型 state (如 retrieved_context) 经 RPC 传输拖垮超时
-                req = {}
-                if isinstance(state, dict):
-                    src = state
-                else:
-                    src = getattr(state, "__dict__", {}) or {}
-                for k in ("user_input", "user_id", "agent_id", "wecom_user_id",
-                          "query", "result", "content", "session_id", "limit"):
-                    if k in src:
-                        req[k] = src[k]
-                if "query" not in req and req.get("user_input"):
-                    req["query"] = req["user_input"]
-                if "user_id" not in req and req.get("wecom_user_id"):
-                    req["user_id"] = req["wecom_user_id"]
+        def _build_req(state: Any) -> Dict[str, Any]:
+            # 只透传必要字段, 避免巨型 state (如 retrieved_context) 经 RPC 传输拖垮超时
+            if isinstance(state, dict):
+                src = state
+            else:
+                src = getattr(state, "__dict__", {}) or {}
+            req: Dict[str, Any] = {}
+            for k in ("user_input", "user_id", "agent_id", "wecom_user_id",
+                      "query", "result", "content", "session_id", "limit"):
+                if k in src:
+                    req[k] = src[k]
+            if "query" not in req and req.get("user_input"):
+                req["query"] = req["user_input"]
+            if "user_id" not in req and req.get("wecom_user_id"):
+                req["user_id"] = req["wecom_user_id"]
 
-                # 记忆写入节点: 构造 content = 问答对
-                if capability_ref == "@cognitive/timem-memory-write":
-                    q = req.get("user_input", "")
-                    a = req.get("result", "")
-                    if q or a:
-                        req["content"] = f"Q: {q}\nA: {a}" if q and a else (q or a)
+            # 记忆写入节点: 构造 content = 问答对
+            if capability_ref == "@cognitive/timem-memory-write":
+                q = req.get("user_input", "")
+                a = req.get("result", "")
+                if q or a:
+                    req["content"] = f"Q: {q}\nA: {a}" if q and a else (q or a)
+            return req
 
-                result = seam_caller(capability_ref, req)
-                if asyncio.iscoroutine(result):
-                    result = await result
-                # 结果 → 输出键: results 列表格式化为文本 (记忆召回)
+        def _format_output(state: Any, result: Any) -> Dict[str, Any]:
+            # 结果 → 输出键: results 列表格式化为文本 (记忆召回)
+            # 保留原 state 其它字段 (LangGraph dict 模式默认 replace 语义)
+            if isinstance(state, dict):
+                output: Dict[str, Any] = dict(state)
+            elif hasattr(state, "__dict__"):
+                output = dict(vars(state))
+            else:
                 output = {}
-                # 保留原 state 其它字段 (LangGraph dict 模式默认 replace 语义)
-                if isinstance(state, dict):
-                    output = dict(state)
-                elif hasattr(state, "__dict__"):
-                    output = dict(vars(state))
-                # 失败/错误结果: 输出空串, 绝不把内部错误信息泄漏给 LLM
-                if isinstance(result, dict) and result.get("error"):
-                    for k in output_keys:
-                        output[k] = ""
-                    output["total"] = 0
-                    logger.warning(f"capability '{capability_ref}' 返回错误, 已屏蔽: {str(result['error'])[:120]}")
-                elif isinstance(result, dict) and isinstance(result.get("results"), list):
-                    chunks = [
-                        str(item.get("content", "")) if isinstance(item, dict) else str(item)
-                        for item in result["results"]
-                    ]
-                    text = "\n\n".join([c for c in chunks if c])
-                    for k in output_keys:
-                        output[k] = text
-                    output["total"] = result.get("total", 0)
-                else:
-                    for k in output_keys:
-                        output[k] = result
-                return output
+            # 失败/错误结果: 输出空串, 绝不把内部错误信息泄漏给 LLM
+            if isinstance(result, dict) and result.get("error"):
+                for k in output_keys:
+                    output[k] = ""
+                output["total"] = 0
+                logger.warning(f"capability '{capability_ref}' 返回错误, 已屏蔽: {str(result['error'])[:120]}")
+            elif isinstance(result, dict) and isinstance(result.get("results"), list):
+                chunks = [
+                    str(item.get("content", "")) if isinstance(item, dict) else str(item)
+                    for item in result["results"]
+                ]
+                text = "\n\n".join([c for c in chunks if c])
+                for k in output_keys:
+                    output[k] = text
+                output["total"] = result.get("total", 0)
+            else:
+                for k in output_keys:
+                    output[k] = result
+            return output
+
+        def _passthrough(state: Any) -> Dict[str, Any]:
             logger.warning(f"capability_ref '{capability_ref}' 无 seam_caller, 透传当前状态")
             # LangGraph 要求至少写入一个 state key，这里透传原状态避免 InvalidUpdateError
             if hasattr(state, "items"):
                 return dict(state)
             return {"_capability_fallback": True}
 
-        return capability_node
+        async def capability_node(state: Any) -> Dict[str, Any]:
+            seam_caller = getattr(self, '_seam_caller', None)
+            if not seam_caller:
+                return _passthrough(state)
+            result = seam_caller(capability_ref, _build_req(state))
+            if asyncio.iscoroutine(result):
+                result = await result
+            return _format_output(state, result)
+
+        def capability_node_sync(state: Any) -> Dict[str, Any]:
+            seam_caller = getattr(self, '_seam_caller', None)
+            if not seam_caller:
+                return _passthrough(state)
+            result = seam_caller(capability_ref, _build_req(state))
+            if asyncio.iscoroutine(result):
+                result = _run_coroutine_sync(result)
+            return _format_output(state, result)
+
+        if RunnableCallable is None:
+            return capability_node_sync
+        return RunnableCallable(func=capability_node_sync, afunc=capability_node)
 
     def set_seam_caller(self, seam_caller: Callable) -> None:
         """

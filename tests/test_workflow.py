@@ -165,6 +165,7 @@ def test_seam_caller():
                 "rag_node": {
                     "type": "capability_node",
                     "capability_ref": "@cognitive/rag-retrieval",
+                    "output_keys": ["result"],
                 }
             },
             "flow": {
@@ -178,9 +179,9 @@ def test_seam_caller():
         yaml_lib.dump(config, f)
         config_path = f.name
 
-    # 模拟 seam_caller
+    # 模拟 seam_caller: 返回 RAG 标准格式 (results 列表 → 格式化为文本写入 output_keys)
     def mock_seam_caller(cap_ref, state):
-        return {"result": f"rag_result for {cap_ref}"}
+        return {"results": [{"content": f"rag_result for {cap_ref}"}], "total": 1}
 
     engine = WorkflowEngine(
         config_path=config_path,
@@ -192,6 +193,48 @@ def test_seam_caller():
     result = graph.invoke({"value": 1})
     assert "rag_result" in result["result"], f"应调 seam_caller, got {result}"
     print(f"  ✅ seam_caller 注入: {result['result']}")
+
+    os.unlink(config_path)
+
+
+def test_capability_async_invoke():
+    """测试: capability 节点异步 ainvoke 路径 (RunnableCallable.afunc)"""
+    import asyncio
+    import tempfile, yaml as yaml_lib
+
+    config = {
+        "workflow": {
+            "name": "cap_async_test",
+            "entry_point": "rag_node",
+            "nodes": {
+                "rag_node": {
+                    "type": "capability_node",
+                    "capability_ref": "@cognitive/rag-retrieval",
+                    "output_keys": ["result"],
+                }
+            },
+            "flow": {
+                "edges": [],
+                "conditional_edges": []
+            }
+        }
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml_lib.dump(config, f)
+        config_path = f.name
+
+    async def mock_async_seam_caller(cap_ref, state):
+        return {"results": [{"content": f"async_rag_result for {cap_ref}"}], "total": 1}
+
+    engine = WorkflowEngine(config_path=config_path, state_schema=TestState)
+    engine.set_seam_caller(mock_async_seam_caller)
+
+    graph = engine.build()
+    result = asyncio.run(graph.ainvoke({"value": 1}))
+    assert "async_rag_result" in result["result"], \
+        f"异步路径应调 async seam_caller, got {result}"
+    print(f"  ✅ capability 异步 ainvoke: {result['result']}")
 
     os.unlink(config_path)
 
@@ -412,5 +455,8 @@ if __name__ == "__main__":
 
     print("\n10. arun_yaml_workflow 异步冒烟")
     test_arun_yaml_workflow_smoke()
+
+    print("\n11. capability 异步 ainvoke")
+    test_capability_async_invoke()
 
     print("\n=== 全部通过 ===")

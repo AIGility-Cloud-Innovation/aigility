@@ -11,8 +11,9 @@ run_yaml_workflow — 自包含 YAML 工作流的一键运行入口。
     (配合 node_registry 映射) 动态导入; 本入口无函数注册参数。
   - llm_node 无需外部函数 (prompt_ref/内联提示词; LLM 服务不可用时
     降级为确定性回退文本)。
-  - 不支持 capability_ref 节点: 其 wrapper 为 async-only, 且依赖 harness
-    经 set_seam_caller 注入, 超出本入口职责。
+  - capability_node 可运行, 但本入口无 seam_caller 注入参数: 未集成 harness
+    时该类节点仅透传状态 (warning); 需注入请直接用 WorkflowEngine +
+    set_seam_caller。
 
 结果提取:
   最终 state 含 "result" 键 → 返回该值的 JSON 安全化;
