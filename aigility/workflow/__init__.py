@@ -7,6 +7,7 @@ ADK Workflow - 工作流引擎模块
   - WorkflowBuilder: 从 YAML 配置构建 LangGraph StateGraph
   - WorkflowEngine: 封装 WorkflowBuilder，提供 invoke/stream 接口
   - schema: 工作流配置的 Pydantic 模型
+  - io: 配置的 YAML 序列化 (save_yaml)
 
 使用方式:
     from aigility.workflow import WorkflowEngine
@@ -29,6 +30,7 @@ from .schema import (
     ConditionalEdgeConfig,
     ConditionalEdgeBranch,
 )
+from .io import save_yaml
 
 __all__ = [
     # 引擎
@@ -44,4 +46,6 @@ __all__ = [
     "FlowConfig",
     "ConditionalEdgeConfig",
     "ConditionalEdgeBranch",
+    # IO
+    "save_yaml",
 ]

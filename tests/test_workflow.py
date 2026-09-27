@@ -196,6 +196,65 @@ def test_seam_caller():
     os.unlink(config_path)
 
 
+# ── save_yaml 读写闭环 ────────────────────────────────────────
+
+def test_save_yaml_roundtrip():
+    """测试: WorkflowConfig → save_yaml → safe_load → 回读校验 roundtrip"""
+    import tempfile
+    import yaml as yaml_lib
+    from aigility.workflow import (
+        WorkflowConfig, NodeConfig, EdgeConfig, FlowConfig, save_yaml,
+    )
+
+    config = WorkflowConfig(
+        name="roundtrip_workflow",
+        description="save_yaml 读写闭环测试",
+        entry_point="start",
+        nodes={
+            "start": NodeConfig(
+                type="function_node",
+                description="起始节点",
+                function_ref="start_node",
+                output_keys=["value"],
+            ),
+        },
+        flow=FlowConfig(
+            edges=[EdgeConfig(**{"from": "start", "to": "__end__"})],
+        ),
+    )
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        out_path = f.name
+
+    try:
+        save_yaml(config, out_path)
+
+        with open(out_path, encoding="utf-8") as f:
+            raw = yaml_lib.safe_load(f)
+
+        # 边应使用别名形式 (from)，与 schema 读取格式一致
+        assert raw["flow"]["edges"][0]["from"] == "start", \
+            f"边应为别名形式 from, got {raw['flow']['edges'][0]}"
+        # Optional 字段的 None 默认值应被清理
+        assert "prompt_ref" not in raw["nodes"]["start"], "None 字段应被清理"
+        assert "capability_ref" not in raw["nodes"]["start"], "None 字段应被清理"
+
+        # 回读校验: 重新走 WorkflowConfig 校验, 与原对象等价
+        restored = WorkflowConfig(**raw)
+        assert restored == config, "roundtrip 后应与原 WorkflowConfig 相等"
+        print("  ✅ schema → YAML → safe_load → 回读一致")
+
+        # dict 输入: 原样写出
+        dict_config = {"name": "dict_flow", "entry_point": "a",
+                       "nodes": {"a": {"type": "llm_node"}}}
+        save_yaml(dict_config, out_path)
+        with open(out_path, encoding="utf-8") as f:
+            assert yaml_lib.safe_load(f) == dict_config, "dict 输入应原样写出"
+        print("  ✅ dict 输入原样写出")
+    finally:
+        os.unlink(out_path)
+
+
 if __name__ == "__main__":
     print("=== aigility WorkflowBuilder 测试 ===\n")
 
@@ -210,5 +269,8 @@ if __name__ == "__main__":
 
     print("\n4. seam_caller 注入")
     test_seam_caller()
+
+    print("\n5. save_yaml 读写闭环")
+    test_save_yaml_roundtrip()
 
     print("\n=== 全部通过 ===")
