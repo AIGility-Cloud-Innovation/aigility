@@ -34,8 +34,8 @@
 - 修复 `capability_node` 在同步 `invoke` 下报 "No synchronous function provided" 的问题：节点包装改为同步/异步双路径（langgraph `RunnableCallable`），同步与异步调用均原生可用。
 - 修复无 Embedding 配置时 RAG 默认不启用、不再触发 HuggingFace 下载。
 - 修复 `state_schema` 支持点分路径字符串自动解析为类。
+- 修复租户 `filter` 在检索中不生效的问题：langchain Qdrant 的 dict filter 键相对 `payload.metadata`（传入 `metadata.user_id` 会被二次前缀为 `metadata.metadata.user_id` 导致语义检索恒为空），现统一做键归一化；`_bm25_search` 补上租户过滤（在 top_k 截断前应用），混合检索两路过滤语义一致，杜绝跨租户泄漏。
 
-- 修复 `capability_node` 在同步 `invoke` 下报 "No synchronous function provided" 的问题：节点包装改为同步/异步双路径（langgraph `RunnableCallable`），同步与异步调用均原生可用。
 ## [0.1.5] - 2026-09-21
 
 ### 新增
