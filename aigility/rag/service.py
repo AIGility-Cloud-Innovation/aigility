@@ -5,10 +5,11 @@ import os
 import shutil
 import hashlib
 import logging
+import threading
 from functools import lru_cache
 from datetime import datetime, timezone
-from typing import Callable, Optional, Dict, List, Any
-from collections import defaultdict
+from typing import Callable, Optional, Dict, List, Any, Tuple
+from collections import OrderedDict, defaultdict
 
 from .usage_tracking import UsageStats, TokenUsage, SearchResult, AddFileResult
 from .embeddings.wrapper import EmbeddingWrapper
@@ -84,7 +85,23 @@ def _matches_metadata_filter(metadata: Dict[str, Any], filter: Dict[str, Any]) -
     return True
 
 
+def _payload_field_key(key: str) -> str:
+    """归一化键 user_id → Qdrant payload 路径 metadata.user_id。已带前缀的不再叠加。"""
+    if key.startswith("metadata."):
+        return key
+    return f"metadata.{key}"
+
+
+def _bm25_bucket_key(normalized_filter: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:
+    """租户桶的稳定键。值转成字符串，避免不可哈希类型进不了字典。"""
+    return tuple(sorted(
+        (str(key), "" if value is None else str(value))
+        for key, value in normalized_filter.items()
+    ))
+
+
 SCROLL_PAGE_SIZE = 256
+BM25_BUCKET_LIMIT = 8
 
 
 class QdrantScrollError(RuntimeError):
@@ -184,10 +201,13 @@ class RAGService:
         self.global_doc_keywords: List[str] = []
 
         # 5. BM25 混合检索（延迟初始化）
+        # 无 filter 的整库索引只给旧的 per-kb collection。有 filter 时按知识库分桶。
         self._bm25_corpus = []  # BM25 语料库
         self._bm25_doc_mapping = {}  # 文档映射
         self._bm25_index = None  # BM25 索引
         self._bm25_built = False  # 索引是否已构建
+        self._bm25_buckets: "OrderedDict[Tuple[Tuple[str, str], ...], dict]" = OrderedDict()
+        self._bm25_lock = threading.RLock()
 
         # 6. Rerank 重排序（可选）
         self._reranker = None
@@ -378,7 +398,7 @@ class RAGService:
             注意：
                 - 返回的 file_hash 可用于后续的 delete_document 和 restore_document 操作
                 - 相同内容的文件会有相同的 file_hash
-                - 使用 file_hash 删除时会删除所有相同内容的文件
+                - 全局集合删除时要同时传入租户 filter，避免相同 file_hash 改到其他知识库
                 - 批量添加文件时建议设置 auto_build_bm25=False，最后手动调用 build_bm25_index(force_rebuild=True)
             """
             try:
@@ -567,13 +587,20 @@ class RAGService:
                 else:
                     logging.info(f"✅ 已添加 {len(chunks)} 个切片 (带上下文缓冲)")
 
-                # 自动构建BM25索引
+                # 上传后只作废该知识库的桶，下次检索再按当前数据重建。
+                # 无租户字段时无法定位桶，丢掉本服务上的全部索引。
                 if auto_build_bm25:
                     try:
-                        self.build_bm25_index()
-                        logging.info(f"🔄 BM25索引已自动更新")
+                        if metadata and metadata.get("user_id") and metadata.get("kb_id"):
+                            self._invalidate_bm25({
+                                "user_id": metadata["user_id"],
+                                "kb_id": metadata["kb_id"],
+                            })
+                        else:
+                            self._invalidate_bm25()
+                        logging.info("🔄 BM25索引已作废，将在下次检索时重建")
                     except Exception as e:
-                        logging.warning(f"⚠️ BM25索引构建失败: {e}")
+                        logging.warning(f"⚠️ BM25索引作废失败: {e}")
 
                 self._total_usage += add_usage
                 self._notify_usage(add_usage)
@@ -695,11 +722,8 @@ class RAGService:
             self.doc_meta_info = {}
             self.global_doc_keywords = []
 
-            # 清空BM25索引
-            self._bm25_corpus = []
-            self._bm25_doc_mapping = {}
-            self._bm25_index = None
-            self._bm25_built = False
+            # 清空BM25索引（整库索引和按知识库分的桶）
+            self._invalidate_bm25()
             logging.info("✅ BM25索引已清空")
 
         except Exception as e:
@@ -773,7 +797,8 @@ class RAGService:
     def delete_document(
         self,
         file_name: Optional[str] = None,
-        file_hash: Optional[str] = None
+        file_hash: Optional[str] = None,
+        filter: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         软删除文档（标记为已删除，不实际从向量库中删除）
@@ -781,14 +806,15 @@ class RAGService:
         Args:
             file_name: 文件名（如果有多个同名文件会全部删除）
             file_hash: 文件哈希值（基于文件内容，推荐使用）
+            filter: 可选租户过滤（如 {"metadata.user_id": ..., "metadata.kb_id": ...}）。
+                    全局集合必须传入，否则相同内容哈希会改到其他知识库。
 
         Returns:
             是否删除成功
 
         注意：
-            - 推荐使用 file_hash，因为它基于内容且唯一
-            - 使用 file_name 会删除所有同名文件
-            - file_hash 是基于文件内容的MD5，相同内容的文件会有相同的hash
+            - 推荐使用 file_hash，并同时传入租户 filter
+            - 不传 filter 时仍按文件标识在当前集合内更新（旧的单库集合）
         """
         try:
             # 至少需要一个标识符
@@ -805,7 +831,8 @@ class RAGService:
             # 更新所有匹配的chunk的metadata
             success = self._update_chunks_metadata(
                 filter_dict=filter_dict,
-                updates={"is_deleted": True}
+                updates={"is_deleted": True},
+                tenant_filter=filter,
             )
 
             if success:
@@ -821,7 +848,8 @@ class RAGService:
     def restore_document(
         self,
         file_name: Optional[str] = None,
-        file_hash: Optional[str] = None
+        file_hash: Optional[str] = None,
+        filter: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         恢复已删除的文档
@@ -829,13 +857,15 @@ class RAGService:
         Args:
             file_name: 文件名（如果有多个同名文件会全部恢复）
             file_hash: 文件哈希值（基于文件内容，推荐使用）
+            filter: 可选租户过滤（如 {"metadata.user_id": ..., "metadata.kb_id": ...}）。
+                    全局集合必须传入，否则相同内容哈希会改到其他知识库。
 
         Returns:
             是否恢复成功
 
         注意：
-            - 推荐使用 file_hash，因为它基于内容且唯一
-            - 使用 file_name 会恢复所有同名文件
+            - 推荐使用 file_hash，并同时传入租户 filter
+            - 不传 filter 时仍按文件标识在当前集合内更新（旧的单库集合）
         """
         try:
             # 至少需要一个标识符
@@ -852,7 +882,8 @@ class RAGService:
             # 更新所有匹配的chunk的metadata
             success = self._update_chunks_metadata(
                 filter_dict=filter_dict,
-                updates={"is_deleted": False}
+                updates={"is_deleted": False},
+                tenant_filter=filter,
             )
 
             if success:
@@ -865,7 +896,12 @@ class RAGService:
             logging.error(f"❌ 恢复文档失败: {str(e)}")
             return False
 
-    def _update_chunks_metadata(self, filter_dict: Dict, updates: Dict) -> bool:
+    def _update_chunks_metadata(
+        self,
+        filter_dict: Dict,
+        updates: Dict,
+        tenant_filter: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         更新匹配条件的chunk的metadata
 
@@ -879,10 +915,14 @@ class RAGService:
         try:
             vector_store_type = self.config.vector_store.provider
 
+            normalized_tenant = _normalize_filter_keys(tenant_filter) or {}
+
             if vector_store_type == "chroma":
                 # Chroma: 使用update方法
                 # 1. 先查询符合条件的文档
-                results = self.vector_store.get(where=filter_dict, limit=None)
+                where = dict(filter_dict)
+                where.update(normalized_tenant)
+                results = self.vector_store.get(where=where, limit=None)
                 if results and results.get("ids"):
                     # 2. 更新metadata
                     metadatas = results["metadatas"]
@@ -900,6 +940,7 @@ class RAGService:
                         ids=ids,
                         metadatas=updated_metadatas
                     )
+                    self._invalidate_bm25_for_metadatas(metadatas, tenant_filter)
                     logging.info(f"✅ Chroma: 更新了 {len(ids)} 个chunk的metadata")
                     return True
                 else:
@@ -920,6 +961,13 @@ class RAGService:
                         FieldCondition(
                             key=f"metadata.{key}",  # 使用 metadata. 前缀访问嵌套字段
                             match=MatchValue(value=value)
+                        )
+                    )
+                for key, value in normalized_tenant.items():
+                    must_conditions.append(
+                        FieldCondition(
+                            key=_payload_field_key(key),
+                            match=MatchValue(value=value),
                         )
                     )
 
@@ -951,6 +999,7 @@ class RAGService:
                             points=[point.id]
                         )
 
+                    self._invalidate_bm25_for_points(points, tenant_filter)
                     logging.info(f"✅ Qdrant: 更新了 {len(points)} 个chunk的metadata")
                     return True
                 else:
@@ -1093,47 +1142,157 @@ class RAGService:
     # BM25 混合检索功能
     # ========================================================
 
-    def build_bm25_index(self, force_rebuild: bool = False):
+    def _ensure_bm25_state(self) -> None:
+        """白盒构造的实例可能没有走过 __init__，只补缺失字段，不覆盖已有索引。"""
+        if not hasattr(self, "_bm25_corpus"):
+            self._bm25_corpus = []
+        if not hasattr(self, "_bm25_doc_mapping"):
+            self._bm25_doc_mapping = {}
+        if not hasattr(self, "_bm25_index"):
+            self._bm25_index = None
+        if not hasattr(self, "_bm25_built"):
+            self._bm25_built = False
+        if not hasattr(self, "_bm25_buckets"):
+            self._bm25_buckets = OrderedDict()
+        if not hasattr(self, "_bm25_lock"):
+            self._bm25_lock = threading.RLock()
+
+    def _invalidate_bm25(self, filter: Optional[Dict[str, Any]] = None) -> None:
+        """丢掉一个知识库的桶。没有租户字段时丢掉本服务上的全部索引。"""
+        self._ensure_bm25_state()
+        normalized = _normalize_filter_keys(filter) or {}
+        with self._bm25_lock:
+            if not normalized:
+                self._bm25_buckets.clear()
+                self._bm25_corpus = []
+                self._bm25_doc_mapping = {}
+                self._bm25_index = None
+                self._bm25_built = False
+                return
+            self._bm25_buckets.pop(_bm25_bucket_key(normalized), None)
+
+    def _invalidate_bm25_for_metadatas(
+        self,
+        metadatas: List[dict],
+        tenant_filter: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        identities = []
+        incomplete = False
+        for metadata in metadatas or []:
+            meta = metadata or {}
+            user_id = meta.get("user_id")
+            kb_id = meta.get("kb_id")
+            if user_id and kb_id:
+                identities.append({"user_id": user_id, "kb_id": kb_id})
+            else:
+                incomplete = True
+        if incomplete or (tenant_filter and not identities):
+            if tenant_filter and not incomplete:
+                self._invalidate_bm25(tenant_filter)
+                return
+            self._invalidate_bm25()
+            return
+        if tenant_filter:
+            self._invalidate_bm25(tenant_filter)
+        for identity in identities:
+            self._invalidate_bm25(identity)
+
+    def _invalidate_bm25_for_points(
+        self,
+        points: List[Any],
+        tenant_filter: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        metadatas = []
+        for point in points or []:
+            payload = point.payload or {}
+            metadatas.append(payload.get("metadata") or {})
+        self._invalidate_bm25_for_metadatas(metadatas, tenant_filter)
+
+    def _bm25_scroll_filter(self, normalized_filter: Dict[str, Any]):
+        """Scroll 用 payload 路径。内存比对才用剥前缀的键。"""
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+        must_not = [
+            FieldCondition(
+                key="metadata.is_deleted",
+                match=MatchValue(value=True),
+            )
+        ]
+        must = [
+            FieldCondition(
+                key=_payload_field_key(key),
+                match=MatchValue(value=value),
+            )
+            for key, value in normalized_filter.items()
+        ]
+        if must:
+            return Filter(must=must, must_not=must_not)
+        return Filter(must_not=must_not)
+
+    def _store_bm25_bucket(self, key: Tuple[Tuple[str, str], ...], bucket: dict) -> None:
+        self._bm25_buckets[key] = bucket
+        self._bm25_buckets.move_to_end(key)
+        while len(self._bm25_buckets) > BM25_BUCKET_LIMIT:
+            self._bm25_buckets.popitem(last=False)
+
+    def _lookup_bm25_bucket(self, normalized_filter: Dict[str, Any]):
+        self._ensure_bm25_state()
+        key = _bm25_bucket_key(normalized_filter)
+        with self._bm25_lock:
+            bucket = self._bm25_buckets.get(key)
+            if bucket is None:
+                return None
+            self._bm25_buckets.move_to_end(key)
+            return bucket
+
+    def build_bm25_index(
+        self,
+        force_rebuild: bool = False,
+        filter: Optional[Dict[str, Any]] = None,
+    ):
         """
         构建 BM25 索引
 
         Args:
             force_rebuild: 是否强制重建索引（默认False，只在未构建时构建）
+            filter: 可选租户过滤。传入时只为该知识库建一桶，禁止退回整库索引。
+                    不传时维持整库索引，只给旧的单库集合使用。
 
         注意：
             - 首次使用BM25检索前必须调用此方法
-            - 添加/删除文档后建议重新构建索引
+            - 添加/删除文档后桶会被作废，下次检索再重建
             - 索引构建过程可能需要几秒钟（取决于文档数量）
         """
-        if self._bm25_built and not force_rebuild:
-            logging.info("✅ BM25索引已存在，跳过构建（使用 force_rebuild=True 强制重建）")
-            return
+        self._ensure_bm25_state()
+        normalized = _normalize_filter_keys(filter) or {}
+        bucket_key = _bm25_bucket_key(normalized) if normalized else None
 
-        try:
-            import math
-            import hashlib
-            from collections import defaultdict
+        with self._bm25_lock:
+            if bucket_key is None:
+                if self._bm25_built and not force_rebuild:
+                    logging.info("✅ BM25索引已存在，跳过构建（使用 force_rebuild=True 强制重建）")
+                    return
+            else:
+                existing = self._bm25_buckets.get(bucket_key)
+                if existing and not force_rebuild:
+                    self._bm25_buckets.move_to_end(bucket_key)
+                    logging.info("✅ 该知识库的BM25索引已存在，跳过构建")
+                    return
 
-            logging.info("📦 开始构建BM25索引...")
-
-            # 从向量库获取所有文档
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
-
-            client = self.vector_store.client
-            collection_name = self.vector_store.collection_name
-
-            points = scroll_all_points(
-                client,
-                collection_name,
-                scroll_filter=Filter(
-                    must_not=[
-                        FieldCondition(
-                            key="metadata.is_deleted",
-                            match=MatchValue(value=True),
-                        )
-                    ]
-                ),
-            )
+            try:
+                logging.info("📦 开始构建BM25索引...")
+                client = self.vector_store.client
+                collection_name = self.vector_store.collection_name
+                points = scroll_all_points(
+                    client,
+                    collection_name,
+                    scroll_filter=self._bm25_scroll_filter(normalized),
+                )
+            except Exception as e:
+                logging.error(f"❌ 构建BM25索引失败: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                return
 
             if not points:
                 logging.warning("⚠️ 没有文档可用于构建BM25索引")
@@ -1149,6 +1308,8 @@ class RAGService:
 
                 # 过滤已删除的文档
                 if metadata.get('is_deleted', False):
+                    continue
+                if normalized and not _matches_metadata_filter(metadata, normalized):
                     continue
 
                 content = payload.get('page_content', '')
@@ -1174,20 +1335,21 @@ class RAGService:
                 index = self._CustomBM25(corpus, k1=1.5, b=0.75)
                 logging.info("✅ BM25索引构建完成 (使用自定义实现)")
 
-            self._bm25_corpus = corpus
-            self._bm25_doc_mapping = doc_mapping
-            self._bm25_index = index
+            if bucket_key is None:
+                self._bm25_corpus = corpus
+                self._bm25_doc_mapping = doc_mapping
+                self._bm25_index = index
+                self._bm25_built = True
+            else:
+                self._store_bm25_bucket(bucket_key, {
+                    "corpus": corpus,
+                    "mapping": doc_mapping,
+                    "index": index,
+                })
 
-            logging.info(f"   索引文档数: {len(self._bm25_corpus)}")
-            avg_len = sum(len(doc) for doc in self._bm25_corpus) / len(self._bm25_corpus)
+            logging.info(f"   索引文档数: {len(corpus)}")
+            avg_len = sum(len(doc) for doc in corpus) / len(corpus)
             logging.info(f"   平均文档长度: {avg_len:.2f} 词")
-
-            self._bm25_built = True
-
-        except Exception as e:
-            logging.error(f"❌ 构建BM25索引失败: {e}")
-            import traceback
-            logging.error(traceback.format_exc())
 
     def _tokenize_for_bm25(self, text: str) -> List[str]:
         """
@@ -1226,13 +1388,25 @@ class RAGService:
             query: 查询文本
             top_k: 返回结果数量
             filter: 可选租户过滤字典（如 {"metadata.user_id": ..., "metadata.kb_id": ...}），
-                    与语义检索侧的租户过滤保持一致；单全局 collection 下 BM25 语料
-                    包含所有租户的 chunk，必须过滤以避免跨租户泄漏
+                    与语义检索侧的租户过滤保持一致。有 filter 时只用该知识库的桶，
+                    不退回整库索引。
 
         Returns:
             [(doc, score), ...] 检索结果列表
         """
-        if not self._bm25_built:
+        self._ensure_bm25_state()
+        tenant_filter = _normalize_filter_keys(filter) or {}
+        if tenant_filter:
+            bucket = self._lookup_bm25_bucket(tenant_filter)
+            if not bucket:
+                logging.warning("⚠️ 该知识库的BM25索引未构建，请先调用 build_bm25_index(filter=...)")
+                return []
+            index = bucket["index"]
+            mapping = bucket["mapping"]
+        elif self._bm25_built and self._bm25_index is not None:
+            index = self._bm25_index
+            mapping = self._bm25_doc_mapping
+        else:
             logging.warning("⚠️ BM25索引未构建，请先调用 build_bm25_index()")
             return []
 
@@ -1244,15 +1418,14 @@ class RAGService:
                 return []
 
             # BM25检索
-            scores = self._bm25_index.get_scores(query_tokens)
+            scores = index.get_scores(query_tokens)
 
             # 租户过滤必须在 top_k 截断之前，否则可能被其他租户的 chunk 挤占名额
-            tenant_filter = _normalize_filter_keys(filter) or {}
             candidates = []
             for idx, score in enumerate(scores):
                 if score <= 0:  # 只保留有分数的文档
                     continue
-                doc_info = self._bm25_doc_mapping.get(idx)
+                doc_info = mapping.get(idx)
                 if not doc_info:
                     continue
                 if tenant_filter and not _matches_metadata_filter(
@@ -1316,8 +1489,11 @@ class RAGService:
         search_usage = UsageStats()
 
         try:
-            # 确保BM25索引已构建
-            if not self._bm25_built:
+            # 有租户 filter 时只建该知识库的桶，不建整库索引。
+            self._ensure_bm25_state()
+            if _normalize_filter_keys(filter):
+                self.build_bm25_index(filter=filter)
+            elif not self._bm25_built:
                 logging.info("📦 BM25索引未构建，自动构建中...")
                 self.build_bm25_index()
 
@@ -1329,11 +1505,19 @@ class RAGService:
                 search_usage.embedding = search_usage.embedding + self._embedding_wrapper.last_usage
                 self._embedding_wrapper.reset_usage()
 
-            if not semantic_docs:
-                return SearchResult(content="", documents=[], usage=search_usage)
-
             # 2. BM25检索（与语义检索侧一致的租户过滤，防止跨租户泄漏）
             bm25_results = self._bm25_search(query, top_k=self.config.search_top_k * 3, filter=filter)
+            if not semantic_docs:
+                if not bm25_results:
+                    return SearchResult(content="", documents=[], usage=search_usage)
+                bm25_docs = [doc for doc, _score in bm25_results][:self.config.search_top_k]
+                content = self._format_search_results(bm25_docs, expand_context)
+                return SearchResult(
+                    content=content,
+                    documents=bm25_docs,
+                    usage=search_usage,
+                    metadata={"bm25_only": True, "doc_count": len(bm25_docs)},
+                )
             if not bm25_results:
                 # BM25无结果，降级到纯语义检索
                 logging.warning("⚠️ BM25检索无结果，使用纯语义检索")

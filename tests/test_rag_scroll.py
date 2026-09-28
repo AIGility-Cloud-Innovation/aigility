@@ -146,3 +146,31 @@ def test_build_bm25_index_keeps_existing_index_when_scroll_fails():
     assert svc._bm25_corpus == [["old"]]
     assert svc._bm25_index == "old-index"
     assert svc._bm25_doc_mapping[0]["content"] == "old"
+
+
+def test_build_bm25_index_with_filter_scrolls_payload_path_and_skips_global_index(monkeypatch):
+    alice = _point("a", "alice-doc")
+    alice.payload["metadata"]["user_id"] = "alice"
+    alice.payload["metadata"]["kb_id"] = "kb1"
+    client = _PagingClient([
+        ([alice], None),
+    ])
+
+    svc = _bare_service()
+    svc.vector_store = SimpleNamespace(client=client, collection_name="timem_knowledge")
+    svc._bm25_built = True
+    svc._bm25_corpus = [["old-global"]]
+    svc._bm25_doc_mapping = {0: {"content": "old-global", "metadata": {}, "point_id": "old"}}
+    svc._bm25_index = "old-index"
+    svc._tokenize_for_bm25 = lambda text: [text]
+    monkeypatch.setattr("aigility.rag.service._load_rank_bm25", lambda: _FakeBM25)
+
+    svc.build_bm25_index(filter={"metadata.user_id": "alice", "metadata.kb_id": "kb1"})
+
+    must = client.calls[0]["scroll_filter"].must
+    assert {item.key for item in must} == {"metadata.user_id", "metadata.kb_id"}
+    assert svc._bm25_index == "old-index"
+    assert svc._bm25_corpus == [["old-global"]]
+    assert len(svc._bm25_buckets) == 1
+    bucket = next(iter(svc._bm25_buckets.values()))
+    assert bucket["corpus"] == [["alice-doc"]]
