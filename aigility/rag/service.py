@@ -84,6 +84,51 @@ def _matches_metadata_filter(metadata: Dict[str, Any], filter: Dict[str, Any]) -
     return True
 
 
+SCROLL_PAGE_SIZE = 256
+
+
+class QdrantScrollError(RuntimeError):
+    """scroll 游标没有前进，已取到的记录不能当成全集。"""
+
+
+def scroll_all_points(
+    client: Any,
+    collection_name: str,
+    scroll_filter: Optional[Any] = None,
+    page_size: int = SCROLL_PAGE_SIZE,
+) -> List[Any]:
+    """按 Qdrant 游标翻完匹配的 points。偏移不前进时抛错，不返回残缺列表。"""
+    points: List[Any] = []
+    offset = None
+    pages = 0
+    while True:
+        batch, next_offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=scroll_filter,
+            limit=page_size,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        pages += 1
+        if batch:
+            points.extend(batch)
+        if next_offset is None:
+            break
+        if next_offset == offset:
+            raise QdrantScrollError(
+                f"Qdrant scroll 偏移未前进: collection={collection_name} offset={offset!r}"
+            )
+        offset = next_offset
+    logging.info(
+        "Qdrant scroll 完成: collection=%s pages=%s points=%s",
+        collection_name,
+        pages,
+        len(points),
+    )
+    return points
+
+
 class RAGService:
     """RAG 服务主类，提供文档入库和检索能力"""
     
@@ -880,12 +925,10 @@ class RAGService:
 
                 logging.debug(f"🔍 Qdrant scroll查询，filter={must_conditions}")
 
-                # 查询符合条件的points
-                points, _ = client.scroll(
-                    collection_name=collection_name,
+                points = scroll_all_points(
+                    client,
+                    collection_name,
                     scroll_filter=Filter(must=must_conditions) if must_conditions else None,
-                    limit=10000,
-                    with_payload=True
                 )
 
                 logging.debug(f"🔍 Qdrant scroll找到 {len(points)} 个points")
@@ -957,8 +1000,9 @@ class RAGService:
                 collection_name = self.config.vector_store.collection_name
 
                 # 注意：LangChain 将 metadata 存在 payload['metadata'] 中
-                points, _ = client.scroll(
-                    collection_name=collection_name,
+                points = scroll_all_points(
+                    client,
+                    collection_name,
                     scroll_filter=Filter(
                         must=[
                             FieldCondition(
@@ -967,8 +1011,6 @@ class RAGService:
                             )
                         ]
                     ),
-                    limit=10000,
-                    with_payload=True
                 )
 
                 for point in points:
@@ -1028,12 +1070,7 @@ class RAGService:
                 client = self.vector_store.client
                 collection_name = self.config.vector_store.collection_name
 
-                # 获取集合中的所有点
-                points, _ = client.scroll(
-                    collection_name=collection_name,
-                    limit=10000,
-                    with_payload=True
-                )
+                points = scroll_all_points(client, collection_name)
 
                 for point in points:
                     metadata = self._get_qdrant_metadata(point.payload)
@@ -1080,28 +1117,34 @@ class RAGService:
             logging.info("📦 开始构建BM25索引...")
 
             # 从向量库获取所有文档
-            from qdrant_client import QdrantClient
             from qdrant_client.models import Filter, FieldCondition, MatchValue
 
             client = self.vector_store.client
             collection_name = self.vector_store.collection_name
 
-            points, _ = client.scroll(
-                collection_name=collection_name,
-                limit=10000,
-                with_payload=True
+            points = scroll_all_points(
+                client,
+                collection_name,
+                scroll_filter=Filter(
+                    must_not=[
+                        FieldCondition(
+                            key="metadata.is_deleted",
+                            match=MatchValue(value=True),
+                        )
+                    ]
+                ),
             )
 
             if not points:
                 logging.warning("⚠️ 没有文档可用于构建BM25索引")
                 return
 
-            # 构建语料库
-            self._bm25_corpus = []
-            self._bm25_doc_mapping = {}
+            # 先在局部变量里建好，成功后再整份替换，避免中途失败留下半份语料
+            corpus: List[List[str]] = []
+            doc_mapping: Dict[int, dict] = {}
 
             for point in points:
-                payload = point.payload
+                payload = point.payload or {}
                 metadata = payload.get('metadata', {})
 
                 # 过滤已删除的文档
@@ -1111,28 +1154,32 @@ class RAGService:
                 content = payload.get('page_content', '')
                 tokens = self._tokenize_for_bm25(content)
 
-                # 使用索引号作为ID（简单可靠）
-                doc_idx = len(self._bm25_corpus)
-
-                self._bm25_corpus.append(tokens)
-                self._bm25_doc_mapping[doc_idx] = {
+                doc_idx = len(corpus)
+                corpus.append(tokens)
+                doc_mapping[doc_idx] = {
                     'content': content,
                     'metadata': metadata,
                     'point_id': point.id
                 }
 
-            # 构建 BM25 索引
+            if not corpus:
+                logging.warning("⚠️ 没有未删除文档可用于构建BM25索引")
+                return
+
             BM25Okapi = _load_rank_bm25()
             if BM25Okapi is not None:
-                self._bm25_index = BM25Okapi(self._bm25_corpus, k1=1.5, b=0.75, epsilon=0.25)
-                logging.info(f"✅ BM25索引构建完成 (使用 rank_bm25 库)")
+                index = BM25Okapi(corpus, k1=1.5, b=0.75, epsilon=0.25)
+                logging.info("✅ BM25索引构建完成 (使用 rank_bm25 库)")
             else:
-                # 使用自定义BM25实现
-                self._bm25_index = self._CustomBM25(self._bm25_corpus, k1=1.5, b=0.75)
-                logging.info(f"✅ BM25索引构建完成 (使用自定义实现)")
+                index = self._CustomBM25(corpus, k1=1.5, b=0.75)
+                logging.info("✅ BM25索引构建完成 (使用自定义实现)")
+
+            self._bm25_corpus = corpus
+            self._bm25_doc_mapping = doc_mapping
+            self._bm25_index = index
 
             logging.info(f"   索引文档数: {len(self._bm25_corpus)}")
-            avg_len = sum(len(doc) for doc in self._bm25_corpus) / len(self._bm25_corpus) if self._bm25_corpus else 0
+            avg_len = sum(len(doc) for doc in self._bm25_corpus) / len(self._bm25_corpus)
             logging.info(f"   平均文档长度: {avg_len:.2f} 词")
 
             self._bm25_built = True
