@@ -1,0 +1,48 @@
+# 测试用工作流配置
+workflow:
+  name: "test_workflow"
+  description: "测试用简单工作流"
+  entry_point: "start"
+
+  nodes:
+    start:
+      type: "function_node"
+      description: "起始节点"
+      function_ref: "start_node"
+      output_keys: ["value"]
+
+    double:
+      type: "function_node"
+      description: "值翻倍"
+      function_ref: "double_node"
+      output_keys: ["value"]
+
+    finish:
+      type: "function_node"
+      description: "结束节点"
+      function_ref: "finish_node"
+      output_keys: ["result"]
+
+  flow:
+    edges:
+      - from: "double"
+        to: "finish"
+    conditional_edges:
+      - from: "start"
+        condition: "check_value"
+        description: "值大于0则翻倍，否则直接结束"
+        branches:
+          - condition: "positive"
+            to: "double"
+            description: "正值，继续翻倍"
+          - condition: "zero_or_negative"
+            to: "finish"
+            description: "零或负值，直接结束"
+
+  node_registry:
+    start: "start_node"
+    double: "double_node"
+    finish: "finish_node"
+
+  condition_registry:
+    check_value: "check_value"

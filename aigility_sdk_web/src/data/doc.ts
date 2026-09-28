@@ -302,8 +302,11 @@ aigility/
 │       └── timem.py         # ✅ TiMEM（太忆）Provider
 │
 ├── workflow/
-│   ├── builder.py           # ❌ WorkflowGraphBuilder - build() 未实现
-│   └── engine.py            # ❌ WorkflowEngine - invoke()/stream() 未实现
+│   ├── builder.py           # ✅ WorkflowBuilder - YAML 配置 → LangGraph 状态图
+│   ├── engine.py            # ✅ WorkflowEngine - invoke/ainvoke 执行封装
+│   ├── schema.py            # ✅ WorkflowConfig 等 Pydantic 校验模型
+│   ├── io.py                # ✅ save_yaml - 配置 YAML 序列化
+│   └── runtime.py           # ✅ run_yaml_workflow - 一键运行入口
 │
 ├── adp/
 │   └── client.py            # ✅ ADPClient - 远程 Agent 调用客户端
@@ -1175,36 +1178,93 @@ memory = Memory(
 
 ## 10. Workflow 模块 {#workflow}
 
-### 10.1 当前状态
+基于 LangGraph 的配置驱动工作流编排：从**自包含 YAML** 构建状态图并执行。适用于对话流（ChatFlow）之外的通用编排场景，支持三种节点类型与条件边。
 
-> **⚠️ 未实现：** \`WorkflowEngine\` 和 \`WorkflowGraphBuilder\` 的核心方法均抛出 \`NotImplementedError\`。
+### 10.1 节点类型
 
-### 10.2 WorkflowEngine（框架）
+| 类型 | 说明 | 函数解析方式 |
+| --- | --- | --- |
+| \`function_node\` | Python 函数节点 | YAML 内 \`node_module\` 指向的模块动态导入（配合 \`node_registry\` 映射） |
+| \`llm_node\` | LLM 调用节点 | 内建闭包，\`prompt_ref\` 引用提示词（\`module.prompt_name\` 或内联文本），无需外部函数 |
+| \`capability_node\` | Seam 能力节点 | 需通过 \`set_seam_caller()\` 注入调用器（harness 集成） |
 
-\`\`\`python
-from aigility.workflow.engine import WorkflowEngine
+### 10.2 配置示例（自包含 YAML）
 
-# 已定义但 invoke()/stream() 未实现
-engine = WorkflowEngine(name="my_workflow", nodes={...})
-# await engine.invoke(state)   → NotImplementedError
-# await engine.stream(state)   → NotImplementedError
+\`\`\`yaml
+# workflow_config.yaml
+workflow:
+  name: "my_workflow"
+  description: "函数节点 + LLM 节点示例"
+  entry_point: "start"
+  node_module: "my_pkg.nodes"        # function_node 函数所在模块
+  nodes:
+    start:
+      type: "function_node"
+      function_ref: "start_node"     # → my_pkg.nodes.start_node
+      output_keys: ["value"]
+    answer:
+      type: "llm_node"
+      prompt_ref: "你是智能助手，请回答用户问题。"
+      output_keys: ["result"]
+  flow:
+    edges:
+      - from: "start"                # 边使用别名 from（非 from_node）
+        to: "answer"
+      - from: "answer"
+        to: "__end__"
 \`\`\`
 
-### 10.3 WorkflowGraphBuilder（框架）
+### 10.3 WorkflowEngine：构建与执行
 
 \`\`\`python
-from aigility.workflow.builder import WorkflowGraphBuilder
+from aigility.workflow import WorkflowEngine
 
-builder = WorkflowGraphBuilder()
-builder.add_node("step1", my_func)
-builder.add_edge("step1", "step2")
-builder.set_start("step1")
-# builder.build()  → NotImplementedError
+engine = WorkflowEngine(
+    config_path="workflow_config.yaml",
+    state_schema=MyState,              # TypedDict / Pydantic 模型，可选（缺省 dict）
+)
+engine.register_node("start_node", start_node)   # 也可完全依赖 node_module 自包含
+
+result = engine.invoke({"user_input": "你好"})   # 同步执行
+# result = await engine.ainvoke({"user_input": "你好"})   # 异步执行
 \`\`\`
 
-### 10.4 设计意图
+条件边通过 \`flow.conditional_edges\` 配置（\`condition\` 函数同样从 \`condition_module\` 解析），静态参数通过节点的 \`params\` 字段合并进 state。
 
-Workflow 模块的定位是提供一个比 ChatFlow 更通用的工作流编排能力，但目前仍处于框架阶段。**实际使用中，建议直接使用 LangGraph 构建自定义工作流**（如 ChatFlow 内部所做的那样）。
+### 10.4 save_yaml：配置序列化
+
+\`\`\`python
+from aigility.workflow import (
+    WorkflowConfig, NodeConfig, EdgeConfig, FlowConfig, save_yaml,
+)
+
+config = WorkflowConfig(
+    name="my_workflow",
+    entry_point="start",
+    nodes={"start": NodeConfig(type="function_node", function_ref="start_node")},
+    flow=FlowConfig(edges=[EdgeConfig(**{"from": "start", "to": "__end__"})]),
+)
+
+save_yaml(config, "workflow_config.yaml")
+# WorkflowConfig 按 by_alias 序列化（边输出为 from）并递归清理 None 字段，
+# 写出的 YAML 可直接被 WorkflowConfig 校验读回；dict 输入则原样写出。
+\`\`\`
+
+### 10.5 run_yaml_workflow：一键运行
+
+\`\`\`python
+from aigility.workflow import run_yaml_workflow, arun_yaml_workflow
+
+result = run_yaml_workflow("workflow_config.yaml", user_input="你好")
+result = await arun_yaml_workflow("workflow_config.yaml", user_input="你好")
+\`\`\`
+
+返回值规则：最终 state 含 \`result\` 键时返回该值，否则回退返回整个最终 state；两者均经 JSON 安全化（不可序列化对象降级为字符串）。
+
+> **注意：**
+> - 一键入口仅支持**自包含 YAML**（\`function_node\` 依赖 YAML 内 \`node_module\`），不提供运行时函数注册参数；
+> - \`capability_node\` 未注入 \`seam_caller\` 时执行时仅透传状态并记录警告，需注入请改用 \`WorkflowEngine\` + \`set_seam_caller()\`；
+> - 模块不做任何异常捕获，配置 / 构建 / 运行 / 序列化错误原样上抛，由调用方（worker）负责报错。
 
 ***
 
@@ -1403,8 +1463,8 @@ class MyCustomTool(BaseTool):
 
 | 模块 | 限制 | 影响 |
 | --- | --- | --- |
-| \`workflow\` | \`WorkflowEngine.invoke()\` / \`stream()\` 未实现 | 无法使用 SDK 的通用工作流引擎 |
-| \`workflow\` | \`WorkflowGraphBuilder.build()\` 无法运行 | 只能直接使用 LangGraph API |
+| \`workflow\` | 一键入口 \`run_yaml_workflow\` 仅支持自包含 YAML | \`function_node\` 依赖 YAML 内 \`node_module\`，无法运行时注册函数 |
+| \`workflow\` | \`capability_node\` 需注入 \`seam_caller\` | 未注入（如经 \`run_yaml_workflow\` 直接运行）时仅透传状态 |
 | \`chatflow\` | 工具系统无注册机制 | 扩展工具需修改源码 |
 | \`chatflow\` | \`WebSearchTool\` 为占位实现 | 互联网搜索不可用 |
 | \`chatflow\` | \`astream\` 使用 updates 模式手动拼接 | 流式输出粒度为节点级，非 token 级 |
@@ -1421,20 +1481,19 @@ class MyCustomTool(BaseTool):
 | --- | --- |
 | 简单对话 + RAG | ✅ 直接使用 \`ChatService\` 或 \`ChatAgent\` |
 | Agent 对话入口 | ✅ 使用 \`ChatAgent.chat()\` 或通过 \`ADKClient.create_chat_agent()\` |
-| 自定义工作流 | ✅ 直接使用 LangGraph（参考 ChatFlow 源码） |
+| 自定义工作流 | ✅ 使用 \`WorkflowEngine\`（YAML 配置）或 \`run_yaml_workflow\` 一键运行 |
 | 远程 Agent 调用 | ✅ 使用 \`ADPClient\` |
 | 本地 RAG | ✅ 使用 \`RAGService\` |
 | 记忆管理 | ✅ 使用 \`Memory\` |
-| 通用工作流引擎 | ❌ SDK 尚未就绪，建议自行基于 LangGraph 实现 |
+| 通用工作流引擎 | ✅ 使用 \`WorkflowEngine\` / \`run_yaml_workflow\`（见第 10 节） |
 
 ### 15.3 路线图
 
 未来可能实现：
 
-- \`WorkflowEngine\` 的 LangGraph StateGraph 封装
-- \`WorkflowGraphBuilder\` 的图构建和编译
 - 更多内置工具（Web Search、SQL 查询等）
 - 工具注册和发现机制
+- Workflow 模块的 capability_node 无缝 harness 集成入口
 
 ***
 
@@ -1484,8 +1543,11 @@ from aigility.memory import (
 )
 
 # ===== Workflow =====
-from aigility.workflow.engine import WorkflowEngine      # ⚠️ 未实现
-from aigility.workflow.builder import WorkflowGraphBuilder  # ⚠️ 未实现
+from aigility.workflow import (
+    WorkflowEngine, WorkflowBuilder,
+    WorkflowConfig, NodeConfig, EdgeConfig, FlowConfig,
+    save_yaml, run_yaml_workflow, arun_yaml_workflow,
+)
 
 # ===== ADP =====
 from aigility.adp.client import ADPClient

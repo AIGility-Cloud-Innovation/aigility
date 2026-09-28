@@ -5,7 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [2.1.0] - 2026-09-27
+
+> **版本线说明：** 0.1.4 / 0.1.5 曾在并行分支上以 0.x 序号发布，但其内容无法被 pip
+> 正常解析安装（PyPI 最高版本为 2.0.x，pip 按版本号大小取最高）。自本版本起统一
+> 使用 2.x 版本线，0.1.x 线不再继续；0.1.5 的 Qdrant 多租户等改动已包含在本版本中。
+
+### 新增
+
+- **Workflow 模块**（2.0.2 中不可用）：基于 LangGraph 的配置驱动工作流编排
+  - `WorkflowBuilder` / `WorkflowEngine`：从自包含 YAML 构建并执行状态图，支持 `function_node` / `llm_node` / `capability_node` 三类节点与条件边；`llm_node` 支持知识库检索、用户记忆与最近对话上下文注入
+  - `save_yaml(config, path)`：`WorkflowConfig`/dict → YAML 序列化（别名形式 + 递归清理 None，写出的文件可直接读回校验）
+  - `run_yaml_workflow(config_path, **state)` / `arun_yaml_workflow(...)`：一键运行入口，返回 JSON 安全的结果（提取 `result` 键，缺失时回退整个最终 state），异常原样上抛
+- **客服记忆闭环**：TiMEM 记忆 recall 检索（user_id / agent_id 隔离）+ save 问答写入 + 瞬时记忆（最近 2 轮）+ 认知干扰屏蔽 + 索引缓存忽略
 
 ### 变更
 
@@ -19,6 +31,21 @@
 ### 修复
 
 - 修复仅安装核心包时，公共导入路径仍可触发可选依赖加载的问题。
+- 修复 `capability_node` 在同步 `invoke` 下报 "No synchronous function provided" 的问题：节点包装改为同步/异步双路径（langgraph `RunnableCallable`），同步与异步调用均原生可用。
+- 修复无 Embedding 配置时 RAG 默认不启用、不再触发 HuggingFace 下载。
+- 修复 `state_schema` 支持点分路径字符串自动解析为类。
+- 修复租户 `filter` 在检索中不生效的问题：langchain Qdrant 的 dict filter 键相对 `payload.metadata`（传入 `metadata.user_id` 会被二次前缀为 `metadata.metadata.user_id` 导致语义检索恒为空），现统一做键归一化；`_bm25_search` 补上租户过滤（在 top_k 截断前应用），混合检索两路过滤语义一致，杜绝跨租户泄漏。
+
+## [0.1.5] - 2026-09-21
+
+### 新增
+- **单全局 Qdrant collection 多租户支持**（Qdrant 官方推荐方案，修复 collection 数量膨胀导致 mmap 耗尽/启动超时）
+  - `add_file(..., metadata=None)`：向每个 chunk.metadata 注入租户身份字段（落库即 `payload.metadata.user_id/kb_id`）
+  - `search / search_bm25_hybrid / _search_with_filter` 新增 `filter` 参数，与默认 `is_deleted` 过滤合并，实现租户级隔离检索
+  - payload 默认索引新增 `metadata.user_id`、`metadata.kb_id`（keyword），提升过滤检索性能
+
+### 兼容性
+- 参数全部可选，默认行为与 0.1.3 完全一致（不传 filter 时行为不变）
 
 ## [0.1.3] - 2026-05-27
 

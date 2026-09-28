@@ -21,7 +21,7 @@ from timem.exceptions import TiMEMError
 
 # ==================== 配置 ====================
 # 修改为您的实际配置
-API_KEY = os.getenv("TIMEM_API_KEY", "sk-ce34d247d9ac3d5ad68152dcad872bb9ee261dfac060798e")
+API_KEY = os.getenv("TIMEM_API_KEY", "")
 BASE_URL = os.getenv("TIMEM_BASE_URL", "http://localhost:8000")
 CHARACTER_ID = "chat_assistant"  # 角色ID，可以根据实际情况修改
 

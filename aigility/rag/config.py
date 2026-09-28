@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # 定义支持的类型
-EmbeddingProviderType = Literal["openai", "huggingface", "dashscope", "zhipuai"]
+EmbeddingProviderType = Literal["none", "openai", "huggingface", "dashscope", "zhipuai"]
 VectorStoreProviderType = Literal["chroma", "milvus", "faiss", "qdrant"]
 
 
@@ -48,8 +48,8 @@ class EmbeddingConfig(BaseModel):
         default_dim: 向量维度（可选，用于校验）
     """
     provider: EmbeddingProviderType = Field(
-        default="huggingface",
-        description="模型提供商: huggingface(本地) / dashscope / openai / zhipuai"
+        default="none",
+        description="模型提供商: none(未配置,RAG不可用) / huggingface(本地) / dashscope / openai / zhipuai。不配置则不下载任何模型"
     )
     model_name: str = Field(
         default="BAAI/bge-small-zh-v1.5",
@@ -128,6 +128,9 @@ class PayloadIndexConfig(BaseModel):
             PayloadIndexField(field_name="metadata.chunk_index", field_type="integer"),
             PayloadIndexField(field_name="metadata.is_deleted", field_type="keyword"),
             PayloadIndexField(field_name="metadata.content_type", field_type="keyword"),
+            # 单全局 collection 方案：租户隔离检索必需索引
+            PayloadIndexField(field_name="metadata.user_id", field_type="keyword"),
+            PayloadIndexField(field_name="metadata.kb_id", field_type="keyword"),
             PayloadIndexField(field_name="metadata.heading", field_type="keyword"),
             PayloadIndexField(field_name="metadata.parent_chunk_id", field_type="keyword"),
         ],

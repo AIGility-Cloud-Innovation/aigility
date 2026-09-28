@@ -7,7 +7,7 @@ import hashlib
 import logging
 from functools import lru_cache
 from datetime import datetime, timezone
-from typing import Callable, Optional, Dict, List
+from typing import Callable, Optional, Dict, List, Any
 from collections import defaultdict
 
 from .usage_tracking import UsageStats, TokenUsage, SearchResult, AddFileResult
@@ -62,6 +62,28 @@ def _load_rank_bm25():
     return BM25Okapi
 
 
+def _normalize_filter_keys(filter: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """过滤键归一化: 'metadata.user_id' → 'user_id'。
+
+    对外 API 与 PayloadIndexConfig 一致，使用 payload 路径风格（metadata.user_id）；
+    但 langchain 向量库的 dict filter 键相对 payload.metadata（内部自动补
+    metadata. 前缀），BM25 文档 metadata 也是顶层键，统一在此剥掉前缀。
+    """
+    if not filter:
+        return filter
+    prefix = "metadata."
+    return {key[len(prefix):] if key.startswith(prefix) else key: value
+            for key, value in filter.items()}
+
+
+def _matches_metadata_filter(metadata: Dict[str, Any], filter: Dict[str, Any]) -> bool:
+    """文档 metadata 是否匹配归一化后的过滤字典（全部键相等才算匹配）"""
+    for key, expected in filter.items():
+        if metadata.get(key) != expected:
+            return False
+    return True
+
+
 class RAGService:
     """RAG 服务主类，提供文档入库和检索能力"""
     
@@ -73,11 +95,22 @@ class RAGService:
         """
         _load_dotenv_for_rag_service()
         self.config = config or RAGConfig()
+        self._enabled = False  # RAG 是否启用 (provider 未配置时为 False)
 
         logging.info(f"🔧 Initializing RAG with: Embedding={self.config.embedding.provider}, Store={self.config.vector_store.provider}")
 
-        # 1. 初始化 Embedding 模型
-        raw_embedding = EmbeddingFactory.get_embedding_model(self.config.embedding)
+        # 1. 初始化 Embedding 模型 (provider='none' 时 RAG 不启用, 不下载模型)
+        try:
+            raw_embedding = EmbeddingFactory.get_embedding_model(self.config.embedding)
+        except ValueError as e:
+            self._enabled = False
+            self.embedding_model = None
+            self._embedding_wrapper = None
+            self.vector_store = None
+            self.ingestion = None
+            logging.warning(f"⚠️ RAG 未启用: {e}")
+            return
+        self._enabled = True
         self.embedding_model = raw_embedding
         self._embedding_wrapper = EmbeddingWrapper(raw_embedding)
 
@@ -275,7 +308,12 @@ class RAGService:
         # 返回前 top_k 个文档
         return [doc for doc, score in scored_docs[:top_k]]
 
-    def add_file(self, file_path: str, auto_build_bm25: bool = True) -> AddFileResult:
+    def add_file(
+        self,
+        file_path: str,
+        auto_build_bm25: bool = True,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AddFileResult:
             """
             加载文件 -> 智能解析 -> 注入上下文元数据 -> 存入向量库
 
@@ -283,6 +321,8 @@ class RAGService:
                 file_path: 文件路径
                 auto_build_bm25: 是否自动构建BM25索引（默认True）
                                  批量添加文件时建议设为False，最后统一调用build_bm25_index()
+                metadata: 可选租户身份字段（如 user_id/kb_id），注入每个 chunk 的 metadata
+                           即 payload.metadata.{key}，供 Qdrant filter 做租户隔离检索
 
             Returns:
                 AddFileResult 对象，包含：
@@ -416,6 +456,14 @@ class RAGService:
                 total_chunks = len(chunks)
                 created_at = datetime.now(timezone.utc).isoformat()
 
+                # 单全局 collection 方案：注入租户身份字段到 chunk.metadata
+                # （落库后即 payload.metadata.{key}，配合 search(filter=...) 做隔离检索）
+                if metadata:
+                    for _chunk in chunks:
+                        for _k, _v in metadata.items():
+                            if _v is not None:
+                                _chunk.metadata[_k] = _v
+
                 if self.config.ingestion.enable_small2big:
                     # Small2Big: parent_text 已由 splitter 注入 metadata
                     # 这里只需要注入 file_hash 相关的元数据和 parent_chunk_id
@@ -494,7 +542,13 @@ class RAGService:
             except Exception as e:
                 logging.error(f"❌ Error adding file {file_path}: {str(e)}")
                 raise e
-    def search(self, query: str, expand_context: bool = True, enable_keyword_boost: bool = True) -> SearchResult:
+    def search(
+        self,
+        query: str,
+        expand_context: bool = True,
+        enable_keyword_boost: bool = True,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> SearchResult:
         """
         检索并融合上下文（使用BM25混合检索）
 
@@ -515,6 +569,12 @@ class RAGService:
             >>> print(str(result))  # 格式化字符串（向后兼容）
             >>> print(result.usage.embedding.total_tokens)  # embedding token 消耗
         """
+        if not getattr(self, '_enabled', False):
+            raise RuntimeError(
+                "[aigility] RAG 未启用: 未配置 Embedding Provider (provider='none')。"
+                "请显式配置 provider (dashscope/openai/zhipuai/huggingface) 后使用检索。"
+            )
+
         try:
             # 根据enable_keyword_boost设置BM25权重
             if enable_keyword_boost:
@@ -531,7 +591,8 @@ class RAGService:
                 query=query,
                 semantic_weight=semantic_weight,
                 bm25_weight=bm25_weight,
-                expand_context=expand_context
+                expand_context=expand_context,
+                filter=filter
             )
             self._total_usage += result.usage
             self._notify_usage(result.usage)
@@ -540,7 +601,7 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ Search failed: {str(e)}")
             # 降级策略：使用纯语义检索
-            docs = self._search_with_filter(query, k=self.config.search_top_k)
+            docs = self._search_with_filter(query, k=self.config.search_top_k, filter=filter)
             content = self._format_search_results(docs, expand_context)
             fallback_usage = UsageStats(
                 embedding=self._embedding_wrapper.last_usage or TokenUsage()
@@ -599,13 +660,20 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ 清空知识库失败: {str(e)}")
 
-    def _search_with_filter(self, query: str, k: int = 5) -> List:
+    def _search_with_filter(
+        self,
+        query: str,
+        k: int = 5,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List:
         """
         带过滤条件的检索，只返回未删除的chunk
 
         Args:
             query: 查询文本
             k: 返回结果数量
+            filter: 可选租户过滤字典（如 {"metadata.user_id": ..., "metadata.kb_id": ...}），
+                    与默认 is_deleted 过滤合并
 
         Returns:
             检索结果列表
@@ -613,33 +681,49 @@ class RAGService:
         try:
             # 根据不同的vector store实现使用不同的过滤方式
             vector_store_type = self.config.vector_store.provider
+            # 对外键为 payload 路径风格（metadata.user_id），归一化为 metadata 顶层键
+            tenant_filter = _normalize_filter_keys(filter) or {}
 
             if vector_store_type == "chroma":
                 # Chroma使用where参数过滤
+                _chroma_filter = {"is_deleted": {"$ne": True}}  # is_deleted != True
+                _chroma_filter.update(tenant_filter)
                 docs = self.vector_store.similarity_search(
                     query,
                     k=k,
-                    filter={"is_deleted": {"$ne": True}}  # is_deleted != True
+                    filter=_chroma_filter
                 )
             elif vector_store_type == "qdrant":
                 # Qdrant: 使用字典格式的filter
-                # LangChain 的 Qdrant adapter 接受字典格式的 filter
+                # LangChain 的 Qdrant adapter 接受字典格式的 filter（键相对 payload.metadata，
+                # 内部自动补 metadata. 前缀，因此这里传顶层键，不能带 metadata. 前缀）
+                _qdrant_filter = {"is_deleted": False}
+                _qdrant_filter.update(tenant_filter)
                 docs = self.vector_store.similarity_search(
                     query,
                     k=k,
-                    filter={"is_deleted": False}
+                    filter=_qdrant_filter
                 )
             else:
                 # 其他向量库，先检索然后手动过滤
                 all_docs = self.vector_store.similarity_search(query, k=k * 3)  # 多取一些以确保有足够结果
-                docs = [doc for doc in all_docs if doc.metadata.get("is_deleted") != True][:k]
+                docs = [
+                    doc for doc in all_docs
+                    if doc.metadata.get("is_deleted") != True
+                    and (not tenant_filter or _matches_metadata_filter(doc.metadata, tenant_filter))
+                ][:k]
 
             return docs
         except Exception as e:
             logging.warning(f"⚠️ 过滤检索失败，降级为普通检索: {str(e)}")
             # 降级策略：使用普通检索
             docs = self.vector_store.similarity_search(query, k=k)
-            return [doc for doc in docs if doc.metadata.get("is_deleted") != True]
+            tenant_filter = _normalize_filter_keys(filter) or {}
+            return [
+                doc for doc in docs
+                if doc.metadata.get("is_deleted") != True
+                and (not tenant_filter or _matches_metadata_filter(doc.metadata, tenant_filter))
+            ]
 
     def delete_document(
         self,
@@ -1082,13 +1166,21 @@ class RAGService:
             words = re.findall(r'[\w]+', text)
             return [w for w in words if len(w) > 1]
 
-    def _bm25_search(self, query: str, top_k: int = 5) -> List:
+    def _bm25_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List:
         """
         BM25 关键词检索
 
         Args:
             query: 查询文本
-            top_k: 返回数量
+            top_k: 返回结果数量
+            filter: 可选租户过滤字典（如 {"metadata.user_id": ..., "metadata.kb_id": ...}），
+                    与语义检索侧的租户过滤保持一致；单全局 collection 下 BM25 语料
+                    包含所有租户的 chunk，必须过滤以避免跨租户泄漏
 
         Returns:
             [(doc, score), ...] 检索结果列表
@@ -1107,24 +1199,36 @@ class RAGService:
             # BM25检索
             scores = self._bm25_index.get_scores(query_tokens)
 
-            # 排序并获取top_k
-            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+            # 租户过滤必须在 top_k 截断之前，否则可能被其他租户的 chunk 挤占名额
+            tenant_filter = _normalize_filter_keys(filter) or {}
+            candidates = []
+            for idx, score in enumerate(scores):
+                if score <= 0:  # 只保留有分数的文档
+                    continue
+                doc_info = self._bm25_doc_mapping.get(idx)
+                if not doc_info:
+                    continue
+                if tenant_filter and not _matches_metadata_filter(
+                    doc_info.get("metadata", {}), tenant_filter
+                ):
+                    continue
+                candidates.append((score, doc_info))
+
+            # 按分数排序并截断 top_k
+            candidates.sort(key=lambda item: item[0], reverse=True)
 
             # 转换为文档对象
             from langchain_core.documents import Document
-            results = []
-            for idx in top_indices:
-                if scores[idx] > 0:  # 只返回有分数的文档
-                    doc_info = self._bm25_doc_mapping.get(idx)
-
-                    if doc_info:
-                        doc = Document(
-                            page_content=doc_info['content'],
-                            metadata=doc_info['metadata']
-                        )
-                        results.append((doc, scores[idx]))
-
-            return results
+            return [
+                (
+                    Document(
+                        page_content=doc_info['content'],
+                        metadata=doc_info['metadata']
+                    ),
+                    score,
+                )
+                for score, doc_info in candidates[:top_k]
+            ]
 
         except Exception as e:
             logging.error(f"❌ BM25检索失败: {e}")
@@ -1135,7 +1239,8 @@ class RAGService:
         query: str,
         semantic_weight: float = 0.6,
         bm25_weight: float = 0.4,
-        expand_context: bool = True
+        expand_context: bool = True,
+        filter: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         """
         BM25混合检索：结合语义检索和关键词检索
@@ -1144,11 +1249,13 @@ class RAGService:
         - 语义检索：理解查询意图，找到语义相关的内容
         - BM25检索：精确关键词匹配，确保关键信息不遗漏
 
-        Args:
-            query: 查询文本
-            semantic_weight: 语义检索权重（0-1，默认0.5）
-            bm25_weight: BM25检索权重（0-1，默认0.5）
-            expand_context: 是否扩展上下文（默认True）
+            Args:
+                query: 查询文本
+                semantic_weight: 语义检索权重（0-1，默认0.5）
+                bm25_weight: BM25检索权重（0-1，默认0.5）
+                expand_context: 是否扩展上下文（默认True）
+                filter: 可选租户过滤字典（如 {"metadata.user_id": ..., "metadata.kb_id": ...}），
+                        同时作用于语义检索与 BM25 检索两路
 
         Returns:
             SearchResult 对象，包含 content, documents, usage, metadata
@@ -1168,7 +1275,9 @@ class RAGService:
                 self.build_bm25_index()
 
             # 1. 语义检索
-            semantic_docs = self._search_with_filter(query, k=self.config.search_top_k * 3)
+            semantic_docs = self._search_with_filter(
+                query, k=self.config.search_top_k * 3, filter=filter
+            )
             if self._embedding_wrapper.last_usage:
                 search_usage.embedding = search_usage.embedding + self._embedding_wrapper.last_usage
                 self._embedding_wrapper.reset_usage()
@@ -1176,8 +1285,8 @@ class RAGService:
             if not semantic_docs:
                 return SearchResult(content="", documents=[], usage=search_usage)
 
-            # 2. BM25检索
-            bm25_results = self._bm25_search(query, top_k=self.config.search_top_k * 3)
+            # 2. BM25检索（与语义检索侧一致的租户过滤，防止跨租户泄漏）
+            bm25_results = self._bm25_search(query, top_k=self.config.search_top_k * 3, filter=filter)
             if not bm25_results:
                 # BM25无结果，降级到纯语义检索
                 logging.warning("⚠️ BM25检索无结果，使用纯语义检索")
@@ -1253,7 +1362,9 @@ class RAGService:
         except Exception as e:
             logging.error(f"❌ BM25混合检索失败: {e}")
             # 降级到纯语义检索
-            semantic_docs = self._search_with_filter(query, k=self.config.search_top_k)
+            semantic_docs = self._search_with_filter(
+                query, k=self.config.search_top_k, filter=filter
+            )
             content = self._format_search_results(semantic_docs, expand_context)
             return SearchResult(
                 content=content,

@@ -18,7 +18,7 @@ from timem import Memory
 
 # ==================== 配置 ====================
 # 修改为您的实际配置
-API_KEY = os.getenv("TIMEM_API_KEY", "sk-82a47b83d6b4e2305cb4f3828466c0982bea8ffa64c3f615")
+API_KEY = os.getenv("TIMEM_API_KEY", "")
 BASE_URL = os.getenv("TIMEM_BASE_URL", "http://apitest.timem.cloud")
 CHARACTER_ID = "chat_assistant"
 
