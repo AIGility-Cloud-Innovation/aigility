@@ -414,7 +414,21 @@ class IngestionManager:
         cleaned_docs = self._clean_docs_light([merged_doc])
         
         # 4. 切分 (默认使用 AST 切分器，保持标题-内容关联)
-        logging.info(f"🔧 切分配置: chunk_size={self.config.chunk_size}, chunk_overlap={self.config.chunk_overlap}")
+        if self.config.enable_small2big:
+            logging.info(
+                "切分配置: parent_chunk_size=%s chunk_overlap=%s "
+                "child_chunk_size=%s child_chunk_overlap=%s",
+                self.config.parent_chunk_size,
+                self.config.chunk_overlap,
+                self.config.child_chunk_size,
+                self.config.child_chunk_overlap,
+            )
+        else:
+            logging.info(
+                "切分配置: chunk_size=%s chunk_overlap=%s",
+                self.config.chunk_size,
+                self.config.chunk_overlap,
+            )
 
         ast_splitter = self._get_ast_splitter()
         if ast_splitter is not None:
