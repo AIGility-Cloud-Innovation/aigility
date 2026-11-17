@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [2.1.1] - 2026-09-29
+
+### 修复
+
+- BM25 在传入租户 `filter` 时只为该知识库建索引，IDF 不再按整库计算，也不会退回整库索引。
+- 上传、软删除、恢复只作废对应知识库的索引桶。全局集合上的删除和恢复必须带 `user_id` 与 `kb_id`，避免相同 `file_hash` 改到其他知识库。
+- 语义检索为空时仍返回该知识库的 BM25 命中。
+
 ## [2.1.0] - 2026-09-27
 
 > **版本线说明：** 0.1.4 / 0.1.5 曾在并行分支上以 0.x 序号发布，但其内容无法被 pip
@@ -35,6 +43,7 @@
 - 修复无 Embedding 配置时 RAG 默认不启用、不再触发 HuggingFace 下载。
 - 修复 `state_schema` 支持点分路径字符串自动解析为类。
 - 修复租户 `filter` 在检索中不生效的问题：langchain Qdrant 的 dict filter 键相对 `payload.metadata`（传入 `metadata.user_id` 会被二次前缀为 `metadata.metadata.user_id` 导致语义检索恒为空），现统一做键归一化；`_bm25_search` 补上租户过滤（在 top_k 截断前应用），混合检索两路过滤语义一致，杜绝跨租户泄漏。
+- 修复 Qdrant `scroll` 只取一页 10000 条并丢弃 `next_page_offset` 的问题：BM25 建索引、元数据更新、已删除列表和调试列表按游标翻页直到结束。偏移不前进时中止且不采用残缺结果；新 BM25 索引在构建成功后才替换旧索引。
 
 ## [0.1.5] - 2026-09-21
 

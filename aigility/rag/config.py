@@ -27,7 +27,7 @@ RAG 配置模块
 
 import os
 from typing import List, Literal, Optional, Dict, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # 定义支持的类型
@@ -228,16 +228,25 @@ class IngestionConfig(BaseModel):
     文档处理配置
     
     Attributes:
-        chunk_size: 分块大小
-        chunk_overlap: 分块重叠
+        chunk_size: 单层兜底切块长度。small2big 开启时不参与默认切分
+        chunk_overlap: 父段重叠（small2big 开启时）；关闭时为单层重叠
+        parent_chunk_size: 父段长度，返回给模型的上下文
+        child_chunk_size: 子段长度，写入向量库并用于检索
+        child_chunk_overlap: 相邻子段重叠
         min_chunk_length: 最小分块长度
         max_chunk_length: 最大分块长度
         enable_duplicate_removal: 是否去重
         enable_text_cleaning: 是否清洗文本
         enable_structured_tag: 是否添加结构化标签
     """
-    chunk_size: int = Field(default=500, description="基础 chunk 长度")
-    chunk_overlap: int = Field(default=100, description="重叠长度")
+    chunk_size: int = Field(
+        default=500,
+        description="单层兜底切块长度。small2big 开启时不参与默认切分",
+    )
+    chunk_overlap: int = Field(
+        default=100,
+        description="父段重叠（small2big 开启时）；关闭时为单层重叠",
+    )
     context_buffer_size: int = Field(default=200, description="上下文扩展时前后 buffer 大小")
     min_chunk_length: int = Field(default=20, description="最小 chunk 长度")
     max_chunk_length: int = Field(default=1000, description="最大 chunk 长度")
@@ -250,6 +259,24 @@ class IngestionConfig(BaseModel):
     parent_chunk_size: int = Field(default=1024, description="父块目标大小（字符数），约等于 512 tokens")
     child_chunk_size: int = Field(default=256, description="子块目标大小（字符数），约等于 128 tokens")
     child_chunk_overlap: int = Field(default=64, description="子块之间的重叠大小（字符数）")
+
+    @model_validator(mode="after")
+    def _check_chunk_bounds(self) -> "IngestionConfig":
+        """子段必须短于父段，重叠必须短于它所在的那一层。"""
+        if self.parent_chunk_size <= 0 or self.child_chunk_size <= 0 or self.chunk_size <= 0:
+            raise ValueError("切块长度必须大于 0")
+        if self.chunk_overlap < 0 or self.child_chunk_overlap < 0:
+            raise ValueError("切块重叠不能为负数")
+        if self.enable_small2big:
+            if self.child_chunk_size >= self.parent_chunk_size:
+                raise ValueError("child_chunk_size 必须小于 parent_chunk_size")
+            if self.chunk_overlap >= self.parent_chunk_size:
+                raise ValueError("chunk_overlap 必须小于 parent_chunk_size")
+            if self.child_chunk_overlap >= self.child_chunk_size:
+                raise ValueError("child_chunk_overlap 必须小于 child_chunk_size")
+        elif self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap 必须小于 chunk_size")
+        return self
 
 
 class RerankConfig(BaseModel):
