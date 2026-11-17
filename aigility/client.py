@@ -116,13 +116,29 @@ class ADKClientBuilder:
         model: str = "gpt-4",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        reasoning: Optional[bool] = None,
+        reasoning_effort: Optional[str] = None,
         **kwargs,
     ) -> "ADKClientBuilder":
-        """配置 LLM"""
+        """配置 LLM
+
+        temperature / max_tokens / reasoning / reasoning_effort 会写入
+        ADKConfig，并由 ModelFactory 在创建模型时生效；未传值时保留默认值。
+        """
         self.config.llm_provider = provider
         self.config.llm_model = model
         self.config.llm_api_key = api_key
         self.config.llm_base_url = base_url
+        if temperature is not None:
+            self.config.llm_temperature = temperature
+        if max_tokens is not None:
+            self.config.llm_max_tokens = max_tokens
+        if reasoning is not None:
+            self.config.llm_reasoning = reasoning
+        if reasoning_effort is not None:
+            self.config.llm_reasoning_effort = reasoning_effort
         return self
 
     def with_memory(

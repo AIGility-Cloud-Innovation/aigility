@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import uuid4
@@ -16,6 +17,8 @@ from ..core.config import ADKConfig
 from ..core.model_factory import ModelFactory
 from ..chatflow.flow import ChatFlow
 from .schema import ChatRequest, ChatResponse
+
+logger = logging.getLogger(__name__)
 
 class ChatService:
     """
@@ -119,9 +122,7 @@ class ChatService:
         )
         flow_elapsed = (time.perf_counter() - flow_start) * 1
 
-        print(f"\n{'─'*60}")
-        print(f"⏱️ [ADK性能] ChatFlow.invoke 总耗时: {flow_elapsed:.2f}s")
-        print(f"{'─'*60}\n")
+        logger.debug("ChatFlow.invoke 总耗时: %.2fs", flow_elapsed)
 
         # 解析回复建议
         reply_suggestions = []
@@ -164,8 +165,11 @@ class ChatService:
         build_elapsed = (time.perf_counter() - build_start) * 1
         total_elapsed = (time.perf_counter() - start_time) * 1
 
-        print(f"⏱️ [ADK性能] 响应构建耗时: {build_elapsed:.2f}s")
-        print(f"⏱️ [ADK性能] process_chat 总耗时: {total_elapsed:.2f}s\n")
+        logger.debug(
+            "响应构建耗时: %.2fs, process_chat 总耗时: %.2fs",
+            build_elapsed,
+            total_elapsed,
+        )
 
         return response
 
@@ -220,7 +224,7 @@ class ChatService:
             result = chain.invoke({})
             return result.title
         except Exception as e:
-            print(f"Title generation failed: {e}")
+            logger.warning("Title generation failed: %s", e)
             return "新会话"
 
     # --- 独立服务：生成回复建议 ---
@@ -243,7 +247,7 @@ class ChatService:
             result = chain.invoke({})
             return result.suggestions
         except Exception as e:
-            print(f"Suggestion generation failed: {e}")
+            logger.warning("Suggestion generation failed: %s", e)
             return ["请重试", "报告错误"]
 # --------------------
 # 对聊天服务的测试
