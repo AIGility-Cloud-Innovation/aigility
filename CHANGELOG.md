@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 本项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [2.1.2] - 2026-11-17
+
+### 修复
+
+- `ADKClientBuilder.with_llm()` 新增 `temperature`、`max_tokens`、`reasoning`、`reasoning_effort` 参数并写入 `ADKConfig`，由 ModelFactory 在创建模型时生效；此前这些扩展参数会被静默丢弃，通过 Client 设置的温度等配置无效。
+- `ChatService.process_chat()` 不再向标准输出打印性能计时：计时改为 `logger.debug`，标题与建议生成失败改为 `logger.warning`，避免污染调用方日志。
+
+### 变更
+
+- 精简部署 workflow、固定镜像版本、忽略 `data` 目录。仅影响部署流程，不改变 SDK 包内容与接口。
+
 ## [2.1.1] - 2026-09-29
 
 ### 修复
