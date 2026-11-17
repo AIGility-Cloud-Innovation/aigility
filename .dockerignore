@@ -76,9 +76,6 @@ start_log.txt
 *.sqlite
 *.sqlite3
 
-# === Data（docker-compose 中通过 volume 映射）===
-data/
-
 # === Local deploy scripts ===
 deploy.bat
 deploy.sh

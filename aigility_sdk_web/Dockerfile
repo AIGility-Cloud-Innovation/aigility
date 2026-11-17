@@ -4,7 +4,7 @@
 # 内部端口统一为 3000
 
 # ============ 构建阶段 ============
-FROM node:22-slim AS builder
+FROM node:22.23.3-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,9 @@ COPY package-lock.json ./
 COPY scripts ./scripts
 
 # 安装依赖（含 devDependencies：tsc + vite 构建时需要）
-RUN npm install --legacy-peer-deps
+# 使用 BuildKit 缓存挂载复用 npm 缓存（本项目用 npm + package-lock.json，非 pnpm）
+RUN --mount=type=cache,id=npm,target=/root/.npm \
+    npm install --legacy-peer-deps
 
 # 复制项目代码
 COPY . .
@@ -32,7 +34,7 @@ RUN if [ -f "$ENV_FILE" ]; then cp "$ENV_FILE" .env; fi
 RUN npm run build
 
 # ============ 运行阶段 ============
-FROM nginx:alpine
+FROM nginx:1.27-alpine
 
 # 拷贝自定义 nginx 配置（SPA history 路由兜底、内部端口 3000）
 COPY nginx.conf /etc/nginx/conf.d/default.conf
